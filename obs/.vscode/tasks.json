@@ -1,0 +1,47 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "shell",
+            "label": "1. Compile C++ and OBS Plugin (CMake MSVC)",
+            "command": "powershell",
+            "args": [
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "build.ps1"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "group": "build"
+        },
+        {
+            "type": "shell",
+            "label": "2. Package DLL & EXE to ZIP",
+            "command": "powershell",
+            "args": [
+                "-Command",
+                "if (Test-Path 'camext_plugin.zip') { Remove-Item 'camext_plugin.zip' -Force }; if (Test-Path 'package') { Remove-Item 'package' -Recurse -Force }; New-Item -ItemType Directory -Force -Path 'package/obs-plugins/64bit' | Out-Null; if (Test-Path 'build/Release/camext.dll') { Copy-Item 'build/Release/camext.dll' 'package/obs-plugins/64bit/' }; if (Test-Path 'build/Release/camext_receiver.exe') { Copy-Item 'build/Release/camext_receiver.exe' 'package/obs-plugins/64bit/' }; if (Test-Path 'package/obs-plugins/64bit/*') { Compress-Archive -Path 'package/obs-plugins' -DestinationPath 'camext_plugin.zip' -Force; Write-Host '[+] Sukses! File ZIP terstruktur berhasil dibuat di camext_plugin.zip. Tinggal ekstrak isinya langsung ke folder instalasi OBS Studio.' } else { Write-Error '[!] Gagal menemukan file hasil kompilasi untuk dikemas!' }; if (Test-Path 'package') { Remove-Item 'package' -Recurse -Force }"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "group": "build"
+        },
+        {
+            "label": "Auto Build OBS Plugin & Standalone (MSVC ZIP)",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "1. Compile C++ and OBS Plugin (CMake MSVC)",
+                "2. Package DLL & EXE to ZIP"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        }
+    ]
+}
