@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <wincodec.h>
 #include <shlwapi.h>
+#include <mmsystem.h>
 #include <iostream>
 #include <chrono>
 #include <vector>
@@ -11,10 +12,67 @@
 
 #pragma comment(lib, "Windowscodecs.lib")
 #pragma comment(lib, "Shlwapi.lib")
+#pragma comment(lib, "winmm.lib")
 
 // Dimensi visualizer default
 const int WINDOW_WIDTH = 640;
 const int WINDOW_HEIGHT = 480;
+
+// Audio Playback global handle
+HWAVEOUT g_hWaveOut = nullptr;
+
+void CALLBACK WaveCallback(HWAVEOUT hwo, UINT uMsg, DWORD_PTR dwInstance, DWORD_PTR dwParam1, DWORD_PTR dwParam2) {
+    if (uMsg == WOM_DONE) {
+        WAVEHDR* pHeader = reinterpret_cast<WAVEHDR*>(dwParam1);
+        waveOutUnprepareHeader(hwo, pHeader, sizeof(WAVEHDR));
+        if (pHeader->lpData) {
+            delete[] pHeader->lpData;
+        }
+        delete pHeader;
+    }
+}
+
+void InitializeAudioPlayback() {
+    WAVEFORMATEX wfx;
+    wfx.wFormatTag = WAVE_FORMAT_PCM;
+    wfx.nChannels = 1; // Mono
+    wfx.nSamplesPerSec = 48000; // 48kHz
+    wfx.wBitsPerSample = 16; // 16-bit
+    wfx.nBlockAlign = (wfx.nChannels * wfx.wBitsPerSample) / 8;
+    wfx.nAvgBytesPerSec = wfx.nSamplesPerSec * wfx.nBlockAlign;
+    wfx.cbSize = 0;
+
+    MMRESULT result = waveOutOpen(&g_hWaveOut, WAVE_MAPPER, &wfx, reinterpret_cast<DWORD_PTR>(WaveCallback), 0, CALLBACK_FUNCTION);
+    if (result != MMSYSERR_NOERROR) {
+        std::cerr << "[Audio Error] Gagal membuka waveOut device! Code: " << result << std::endl;
+    } else {
+        std::cout << "[Audio] waveOut playback berhasil diinisialisasi (48kHz Mono 16-bit)." << std::endl;
+    }
+}
+
+void PlayAudioBuffer(const uint8_t* data, size_t size) {
+    if (!g_hWaveOut || size == 0) return;
+
+    WAVEHDR* pHeader = new WAVEHDR();
+    ZeroMemory(pHeader, sizeof(WAVEHDR));
+    
+    pHeader->lpData = new char[size];
+    std::memcpy(pHeader->lpData, data, size);
+    pHeader->dwBufferLength = static_cast<DWORD>(size);
+
+    MMRESULT res = waveOutPrepareHeader(g_hWaveOut, pHeader, sizeof(WAVEHDR));
+    if (res == MMSYSERR_NOERROR) {
+        res = waveOutWrite(g_hWaveOut, pHeader, sizeof(WAVEHDR));
+        if (res != MMSYSERR_NOERROR) {
+            waveOutUnprepareHeader(g_hWaveOut, pHeader, sizeof(WAVEHDR));
+            delete[] pHeader->lpData;
+            delete pHeader;
+        }
+    } else {
+        delete[] pHeader->lpData;
+        delete pHeader;
+    }
+}
 
 // Mutex & Buffer global untuk pertukaran data video ke GUI Thread
 std::vector<uint8_t> g_rgb_buffer;
@@ -274,15 +332,26 @@ void NetworkReceiveLoop(FrameQueue* queue, SocketServer* server) {
     CoUninitialize();
 }
 
+void AudioReceiveLoop(FrameQueue* audio_queue) {
+    FramePacket packet;
+    while (g_app_running) {
+        if (audio_queue->Pop(packet, 100)) {
+            PlayAudioBuffer(packet.payload.data(), packet.payload.size());
+        }
+    }
+}
+
 int main() {
     std::cout << "===========================================" << std::endl;
     std::cout << "    CamExt Standalone GPU Visualizer       " << std::endl;
     std::cout << "===========================================" << std::endl;
 
     InitializeCriticalSection(&g_buffer_cs);
+    InitializeAudioPlayback();
 
     FrameQueue queue(5);
-    SocketServer server(queue);
+    FrameQueue audio_queue(100);
+    SocketServer server(queue, &audio_queue);
 
     int port = 4455;
     bool use_tcp = true;
@@ -290,6 +359,9 @@ int main() {
     std::cout << "[*] Memulai server soket di port " << port << "..." << std::endl;
     if (!server.Start(port, use_tcp)) {
         std::cerr << "[Error] Gagal memulai server soket!" << std::endl;
+        if (g_hWaveOut) {
+            waveOutClose(g_hWaveOut);
+        }
         DeleteCriticalSection(&g_buffer_cs);
         return 1;
     }
@@ -310,6 +382,9 @@ int main() {
     if (!RegisterClassEx(&wc)) {
         std::cerr << "[Error] Gagal mendaftarkan kelas Window!" << std::endl;
         server.Stop();
+        if (g_hWaveOut) {
+            waveOutClose(g_hWaveOut);
+        }
         DeleteCriticalSection(&g_buffer_cs);
         return 1;
     }
@@ -327,6 +402,9 @@ int main() {
     if (!g_hwnd) {
         std::cerr << "[Error] Gagal membuat Window GUI!" << std::endl;
         server.Stop();
+        if (g_hWaveOut) {
+            waveOutClose(g_hWaveOut);
+        }
         DeleteCriticalSection(&g_buffer_cs);
         return 1;
     }
@@ -335,8 +413,9 @@ int main() {
     HBRUSH brush = CreateSolidBrush(RGB(18, 18, 18));
     SetClassLongPtr(g_hwnd, GCLP_HBRBACKGROUND, (LONG_PTR)brush);
 
-    // Jalankan thread penerimaan soket video
+    // Jalankan thread penerimaan soket video dan audio
     std::thread net_thread(NetworkReceiveLoop, &queue, &server);
+    std::thread audio_thread(AudioReceiveLoop, &audio_queue);
 
     // --- WINDOWS MESSAGE LOOP (MAIN THREAD) ---
     MSG msg;
@@ -358,6 +437,15 @@ int main() {
 
     if (net_thread.joinable()) {
         net_thread.join();
+    }
+    if (audio_thread.joinable()) {
+        audio_thread.join();
+    }
+
+    if (g_hWaveOut) {
+        waveOutReset(g_hWaveOut);
+        waveOutClose(g_hWaveOut);
+        g_hWaveOut = nullptr;
     }
 
     DeleteObject(brush);

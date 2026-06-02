@@ -44,6 +44,7 @@ class StreamRepositoryImpl implements IStreamRepository {
         width: config.width,
         height: config.height,
         fps: config.fps,
+        enableAudio: config.enableAudio,
       );
 
       _updateStatus(ConnectionStatus.connected);
@@ -86,7 +87,7 @@ class StreamRepositoryImpl implements IStreamRepository {
       if (elapsedSec <= 0) return;
 
       // Estimasi statistik transmisi biner berdasarkan konfigurasi aktif
-      final targetFps = config.width == 1920 ? 30.0 : 60.0; // 1080p target 30fps, 720p/480p target 60fps
+      final targetFps = config.fps.toDouble();
       final estimatedMbps = config.width == 1920 ? 12.5 : (config.width == 1280 ? 6.5 : 3.0);
 
       _stats = _stats.copyWith(
@@ -99,6 +100,11 @@ class StreamRepositoryImpl implements IStreamRepository {
       _statsController.add(_stats);
       _lastStatsTime = now;
     });
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> getSupportedResolutions() {
+    return platformSource.getSupportedResolutions();
   }
 
   int _getCodecTypeValue(VideoCodec codec) {

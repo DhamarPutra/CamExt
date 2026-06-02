@@ -7,4 +7,5 @@ abstract class IStreamRepository {
   Future<void> stopStream();
   Stream<StreamStats> getStreamStats();
   Stream<ConnectionStatus> getConnectionStatus();
+  Future<List<Map<String, dynamic>>> getSupportedResolutions();
 }

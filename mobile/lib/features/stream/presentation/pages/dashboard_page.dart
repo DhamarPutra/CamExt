@@ -21,6 +21,7 @@ class _DashboardPageState extends State<DashboardPage> {
   final _ipController = TextEditingController();
   final _portController = TextEditingController();
   String _cameraError = '';
+  List<Map<String, dynamic>> _supportedResolutions = [];
 
   @override
   void initState() {
@@ -28,15 +29,30 @@ class _DashboardPageState extends State<DashboardPage> {
     _ipController.text = widget.notifier.value.config.ipAddress;
     _portController.text = widget.notifier.value.config.port.toString();
     
-    // Minta izin kamera saat aplikasi dibuka
-    _requestCameraPermission();
+    _requestPermissions();
+    _loadResolutions();
   }
 
-  Future<void> _requestCameraPermission() async {
-    final status = await Permission.camera.request();
-    if (!status.isGranted) {
+  Future<void> _loadResolutions() async {
+    final res = await PlatformChannelSource().getSupportedResolutions();
+    setState(() {
+      _supportedResolutions = res;
+    });
+    // Set the first available resolution as active config
+    if (res.isNotEmpty) {
+      final width = res.first['width'] as int;
+      final height = res.first['height'] as int;
+      final maxFps = res.first['maxFps'] as int;
+      widget.notifier.updateResolutionAndFps(width, height, maxFps);
+    }
+  }
+
+  Future<void> _requestPermissions() async {
+    final cameraStatus = await Permission.camera.request();
+    final micStatus = await Permission.microphone.request();
+    if (!cameraStatus.isGranted || !micStatus.isGranted) {
       setState(() {
-        _cameraError = 'Izin kamera ditolak. Silakan berikan izin di pengaturan.';
+        _cameraError = 'Izin Kamera & Mikrofon diperlukan untuk streaming.';
       });
     }
   }
@@ -410,31 +426,37 @@ class _DashboardPageState extends State<DashboardPage> {
             ),
             const SizedBox(height: 24),
 
-            // Protocol Selection
-            Row(
-              children: [
-                Expanded(
-                  child: _buildSelectorTile<ConnectionProtocol>(
-                    title: 'TCP (Stabil)',
-                    value: ConnectionProtocol.tcp,
-                    groupValue: state.config.protocol,
-                    isDisabled: isDisabled,
-                    onChanged: (p) => widget.notifier.updateProtocol(p!),
+            const SizedBox(height: 12),
+            // Auto Mode Indicator Text
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1B1E2E),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF2C314C)),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    state.config.ipAddress == '127.0.0.1'
+                        ? Icons.usb_rounded
+                        : Icons.wifi_rounded,
+                    color: AppTheme.accentNeonCyan,
+                    size: 16,
                   ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _buildSelectorTile<ConnectionProtocol>(
-                    title: 'UDP (Cepat)',
-                    value: ConnectionProtocol.udp,
-                    groupValue: state.config.protocol,
-                    isDisabled: isDisabled,
-                    onChanged: (p) => widget.notifier.updateProtocol(p!),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      state.config.ipAddress == '127.0.0.1'
+                          ? '🔌 Mode USB (ADB Reverse) aktif. Pastikan adb reverse tcp:4455 tcp:4455 telah berjalan di PC.'
+                          : '📶 Mode Wireless (Wi-Fi) aktif. Pastikan HP dan PC berada dalam satu jaringan.',
+                      style: const TextStyle(color: AppTheme.textMuted, fontSize: 11),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 24),
 
             // Camera Resolution Selection
             const Text(
@@ -446,45 +468,42 @@ class _DashboardPageState extends State<DashboardPage> {
               ),
             ),
             const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: _buildSelectorTile<int>(
-                    title: '1080p (HQ)',
-                    value: 1920,
-                    groupValue: state.config.width,
-                    isDisabled: isDisabled,
-                    onChanged: (val) {
-                      widget.notifier.updateResolution(1920, 1080);
-                    },
+            if (_supportedResolutions.isEmpty)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child: SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.accentNeonCyan),
                   ),
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _buildSelectorTile<int>(
-                    title: '720p (Seimbang)',
-                    value: 1280,
-                    groupValue: state.config.width,
-                    isDisabled: isDisabled,
-                    onChanged: (val) {
-                      widget.notifier.updateResolution(1280, 720);
-                    },
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _buildSelectorTile<int>(
-                    title: '480p (Lancar)',
-                    value: 640,
-                    groupValue: state.config.width,
-                    isDisabled: isDisabled,
-                    onChanged: (val) {
-                      widget.notifier.updateResolution(640, 480);
-                    },
-                  ),
-                ),
-              ],
-            ),
+              )
+            else
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: _supportedResolutions.map((item) {
+                  final w = item['width'] as int;
+                  final h = item['height'] as int;
+                  final maxFps = item['maxFps'] as int;
+                  
+                  final title = '${h}p (${maxFps} FPS)';
+                  
+                  return SizedBox(
+                    width: (MediaQuery.of(context).size.width - 68) / 2, // 2 items per row
+                    child: _buildSelectorTile<int>(
+                      title: title,
+                      value: w,
+                      groupValue: state.config.width,
+                      isDisabled: isDisabled,
+                      onChanged: (val) {
+                        widget.notifier.updateResolutionAndFps(w, h, maxFps);
+                      },
+                    ),
+                  );
+                }).toList(),
+              ),
             const SizedBox(height: 20),
 
             // Codec Selection
@@ -527,6 +546,48 @@ class _DashboardPageState extends State<DashboardPage> {
                     isDisabled: isDisabled,
                     onChanged: (c) => widget.notifier.updateCodec(c!),
                   ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            const Divider(color: Color(0xFF2C314C)),
+            const SizedBox(height: 12),
+
+            // Microphone Streaming Toggle
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'STREAMING SUARA (MIKROFON)',
+                        style: TextStyle(
+                          color: AppTheme.textMuted,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        'Mengirimkan suara mikrofon HP ke PC secara real-time',
+                        style: TextStyle(
+                          color: AppTheme.textMuted,
+                          fontSize: 10,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Switch(
+                  value: state.config.enableAudio,
+                  activeColor: AppTheme.accentNeonCyan,
+                  onChanged: isDisabled
+                      ? null
+                      : (val) {
+                          widget.notifier.toggleAudio(val);
+                        },
                 ),
               ],
             ),

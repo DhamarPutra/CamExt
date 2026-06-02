@@ -17,6 +17,7 @@ class StreamConfig {
   final int width;
   final int height;
   final int fps;
+  final bool enableAudio;
 
   const StreamConfig({
     required this.ipAddress,
@@ -26,6 +27,7 @@ class StreamConfig {
     this.width = 1920,
     this.height = 1080,
     this.fps = 60,
+    this.enableAudio = false,
   });
 
   StreamConfig copyWith({
@@ -36,6 +38,7 @@ class StreamConfig {
     int? width,
     int? height,
     int? fps,
+    bool? enableAudio,
   }) {
     return StreamConfig(
       ipAddress: ipAddress ?? this.ipAddress,
@@ -45,6 +48,7 @@ class StreamConfig {
       width: width ?? this.width,
       height: height ?? this.height,
       fps: fps ?? this.fps,
+      enableAudio: enableAudio ?? this.enableAudio,
     );
   }
 }

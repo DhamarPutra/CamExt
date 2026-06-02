@@ -14,6 +14,9 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import android.view.Surface
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -21,6 +24,7 @@ import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import java.net.Socket
 import java.util.concurrent.Executors
+import kotlin.concurrent.thread
 
 class MainActivity : FlutterActivity() {
     private val CONTROL_CHANNEL = "com.fujiwaracreative.camext/control"
@@ -36,6 +40,10 @@ class MainActivity : FlutterActivity() {
     private var sequenceNumber = 0
     private var isStreamingNative = false
     
+    private var isStreamingAudio = false
+    private var audioRecord: AudioRecord? = null
+    private var audioThread: Thread? = null
+    
     private var cameraHandlerThread: HandlerThread? = null
     private var cameraHandler: Handler? = null
 
@@ -49,13 +57,18 @@ class MainActivity : FlutterActivity() {
                     val port = call.argument<Int>("port") ?: 4455
                     val width = call.argument<Int>("width") ?: 1280
                     val height = call.argument<Int>("height") ?: 720
+                    val enableAudio = call.argument<Boolean>("enableAudio") ?: false
 
-                    startNativeCameraStream(ip, port, width, height)
+                    startNativeCameraStream(ip, port, width, height, enableAudio)
                     result.success(null)
                 }
                 "stopCapture" -> {
                     stopNativeCameraStream()
                     result.success(null)
+                }
+                "getSupportedResolutions" -> {
+                    val resolutions = getSupportedResolutions()
+                    result.success(resolutions)
                 }
                 else -> {
                     result.notImplemented()
@@ -64,7 +77,7 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun startNativeCameraStream(ip: String, port: Int, width: Int, height: Int) {
+    private fun startNativeCameraStream(ip: String, port: Int, width: Int, height: Int, enableAudio: Boolean) {
         if (isStreamingNative) return
         isStreamingNative = true
         sequenceNumber = 0
@@ -81,6 +94,10 @@ class MainActivity : FlutterActivity() {
                 
                 mainHandler.post {
                     initNativeCamera(width, height)
+                }
+
+                if (enableAudio) {
+                    startAudioCapture()
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -142,6 +159,38 @@ class MainActivity : FlutterActivity() {
                 try {
                     val builder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
                     builder.addTarget(readerSurface)
+
+                    // Konfigurasi target FPS range untuk mengaktifkan 60 FPS jika didukung
+                    val cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                    val cameraId = cameraDevice?.id ?: "0"
+                    val chars = cameraManager.getCameraCharacteristics(cameraId)
+                    val fpsRanges = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                    if (fpsRanges != null) {
+                        var bestRange: android.util.Range<Int>? = null
+                        for (range in fpsRanges) {
+                            if (range.upper == 60) {
+                                if (bestRange == null || range.lower > bestRange.lower) {
+                                    bestRange = range
+                                }
+                            }
+                        }
+                        if (bestRange != null) {
+                            builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, bestRange)
+                            System.out.println("[+] Native Camera: Target AE FPS Range disetel ke $bestRange")
+                        } else {
+                            var highestUpperRange: android.util.Range<Int>? = null
+                            for (range in fpsRanges) {
+                                if (highestUpperRange == null || range.upper > highestUpperRange.upper) {
+                                    highestUpperRange = range
+                                }
+                            }
+                            if (highestUpperRange != null) {
+                                builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, highestUpperRange)
+                                System.out.println("[+] Native Camera: Target AE FPS Range fallback disetel ke $highestUpperRange")
+                            }
+                        }
+                    }
+
                     captureSession?.setRepeatingRequest(builder.build(), null, cameraHandler)
                     System.out.println("[+] Native camera capture session active.")
                 } catch (e: Exception) {
@@ -226,6 +275,8 @@ class MainActivity : FlutterActivity() {
         isStreamingNative = false
         System.out.println("[*] Stopping native camera stream...")
 
+        stopAudioCapture()
+
         try {
             captureSession?.close()
             captureSession = null
@@ -245,6 +296,150 @@ class MainActivity : FlutterActivity() {
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+
+    private fun startAudioCapture() {
+        if (isStreamingAudio) return
+        isStreamingAudio = true
+
+        val sampleRate = 48000
+        val channelConfig = AudioFormat.CHANNEL_IN_MONO
+        val audioFormat = AudioFormat.ENCODING_PCM_16BIT
+        val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+
+        if (bufferSize <= 0) {
+            System.err.println("[!] Invalid AudioRecord buffer size: $bufferSize")
+            return
+        }
+
+        try {
+            audioRecord = AudioRecord(
+                MediaRecorder.AudioSource.MIC,
+                sampleRate,
+                channelConfig,
+                audioFormat,
+                bufferSize
+            )
+
+            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                System.err.println("[!] Failed to initialize AudioRecord")
+                audioRecord?.release()
+                audioRecord = null
+                return
+            }
+
+            audioRecord?.startRecording()
+            System.out.println("[+] AudioRecord started recording.")
+
+            audioThread = Thread {
+                val audioBuffer = ByteArray(bufferSize)
+                while (isStreamingAudio && isStreamingNative) {
+                    val readBytes = audioRecord?.read(audioBuffer, 0, audioBuffer.size) ?: -1
+                    if (readBytes > 0) {
+                        sendAudioPacket(audioBuffer, readBytes)
+                    }
+                }
+            }
+            audioThread?.start()
+        } catch (e: SecurityException) {
+            System.err.println("[!] Permission RECORD_AUDIO not granted or audio device busy.")
+            e.printStackTrace()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun stopAudioCapture() {
+        isStreamingAudio = false
+        try {
+            audioRecord?.stop()
+            audioRecord?.release()
+            audioRecord = null
+            audioThread?.join(1000)
+            audioThread = null
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun sendAudioPacket(buffer: ByteArray, size: Int) {
+        socketExecutor.submit {
+            try {
+                val out = outputStream ?: return@submit
+                val header = ByteArray(20)
+
+                header[0] = 0xCA.toByte()
+                header[1] = 0x5E.toByte()
+                header[2] = 0xCA.toByte()
+                header[3] = 0x5E.toByte()
+
+                sequenceNumber++
+                header[4] = (sequenceNumber ushr 24).toByte()
+                header[5] = (sequenceNumber ushr 16).toByte()
+                header[6] = (sequenceNumber ushr 8).toByte()
+                header[7] = sequenceNumber.toByte()
+
+                val ts = System.currentTimeMillis()
+                header[8] = (ts ushr 24).toByte()
+                header[9] = (ts ushr 16).toByte()
+                header[10] = (ts ushr 8).toByte()
+                header[11] = ts.toByte()
+
+                header[12] = 10.toByte() // Codec PCM Audio = 10
+
+                header[16] = (size ushr 24).toByte()
+                header[17] = (size ushr 16).toByte()
+                header[18] = (size ushr 8).toByte()
+                header[19] = size.toByte()
+
+                synchronized(this) {
+                    out.write(header)
+                    out.write(buffer, 0, size)
+                    out.flush()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    private fun getSupportedResolutions(): List<Map<String, Any>> {
+        val list = mutableListOf<Map<String, Any>>()
+        try {
+            val cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val cameraId = cameraManager.cameraIdList.firstOrNull { id ->
+                val chars = cameraManager.getCameraCharacteristics(id)
+                chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+            } ?: cameraManager.cameraIdList[0]
+
+            val chars = cameraManager.getCameraCharacteristics(cameraId)
+            val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            if (map != null) {
+                val sizes = map.getOutputSizes(ImageFormat.YUV_420_888)
+                if (sizes != null) {
+                    for (size in sizes) {
+                        val minDuration = map.getOutputMinFrameDuration(ImageFormat.YUV_420_888, size)
+                        val maxFps = if (minDuration > 0) {
+                            (1_000_000_000L / minDuration).toInt()
+                        } else {
+                            30
+                        }
+                        
+                        val displayFps = if (maxFps >= 60) 60 else if (maxFps >= 30) 30 else maxFps
+
+                        val item = mapOf(
+                            "width" to size.width,
+                            "height" to size.height,
+                            "maxFps" to displayFps
+                        )
+                        list.add(item)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return list
     }
 
     private fun convertYuvToJpeg(

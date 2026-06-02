@@ -18,7 +18,7 @@
 
 class SocketServer {
 public:
-    SocketServer(FrameQueue& queue);
+    SocketServer(FrameQueue& video_queue, FrameQueue* audio_queue = nullptr);
     ~SocketServer();
 
     /// Starts the async socket listener on the specified port.
@@ -35,7 +35,8 @@ private:
     bool InitializeSockets();
     void CleanupSockets();
 
-    FrameQueue& queue_;
+    FrameQueue& video_queue_;
+    FrameQueue* audio_queue_;
     int port_;
     bool use_tcp_;
     std::atomic<bool> is_running_;

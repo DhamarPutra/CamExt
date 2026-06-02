@@ -21,6 +21,7 @@ class PlatformChannelSource {
     required int width,
     required int height,
     required int fps,
+    required bool enableAudio,
   }) async {
     try {
       await _controlChannel.invokeMethod('startCapture', {
@@ -30,6 +31,7 @@ class PlatformChannelSource {
         'width': width,
         'height': height,
         'fps': fps,
+        'enableAudio': enableAudio,
       });
     } catch (e) {
       rethrow;
@@ -41,5 +43,23 @@ class PlatformChannelSource {
     try {
       await _controlChannel.invokeMethod('stopCapture');
     } catch (_) {}
+  }
+
+  /// Retrieves list of supported camera resolutions with their maximum frame rates.
+  Future<List<Map<String, dynamic>>> getSupportedResolutions() async {
+    try {
+      final List<dynamic>? res = await _controlChannel.invokeMethod('getSupportedResolutions');
+      if (res != null) {
+        return res.map((item) => Map<String, dynamic>.from(item as Map)).toList();
+      }
+    } catch (e) {
+      // Return default fallbacks if error occurs or not supported
+      print('[PlatformChannelSource] Error getting resolutions: $e');
+    }
+    return [
+      {'width': 1920, 'height': 1080, 'maxFps': 60},
+      {'width': 1280, 'height': 720, 'maxFps': 30},
+      {'width': 640, 'height': 480, 'maxFps': 30},
+    ];
   }
 }
