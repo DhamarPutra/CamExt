@@ -59,15 +59,24 @@ File APK akan terbentuk di `mobile/build/app/outputs/flutter-apk/app-release.apk
 
 ---
 
-## 🔌 Cara Penggunaan via Kabel USB (Latensi Terendah)
+## 🔌 Cara Penggunaan
 
-1. Hubungkan HP Android ke PC via Kabel USB, pastikan **USB Debugging** aktif.
-2. Jalankan perintah reverse forwarding pada terminal PC:
+Anda dapat menggunakan CamExt baik via kabel USB (disarankan untuk latensi terendah) maupun jaringan Wi-Fi lokal.
+
+### Opsi A: Menggunakan Kabel USB (Latensi Terendah / Stabil)
+1. Hubungkan HP Android ke PC via Kabel USB, pastikan **USB Debugging** di HP Anda telah diaktifkan.
+2. Buka Terminal/CMD di PC Anda dan jalankan perintah *port reverse forwarding*:
    ```bash
    adb reverse tcp:4455 tcp:4455
    ```
-3. Jalankan `camext_receiver.exe` di PC.
-4. Buka aplikasi **CamExt** di HP, masukkan IP Address `127.0.0.1`, pilih resolusi kamera yang diinginkan (misal: **720p** atau **480p** untuk 60 FPS), lalu klik **MULAI STREAMING**.
+3. Jalankan **`camext_receiver.exe`** di PC Anda.
+4. Buka aplikasi **CamExt** di HP, masukkan IP Address `127.0.0.1` dan Port `4455`, lalu ketuk **MULAI STREAMING**.
+
+### Opsi B: Menggunakan Wi-Fi (Nirkabel)
+1. Pastikan PC dan HP Android Anda terhubung ke **satu jaringan Wi-Fi / Router yang sama**.
+2. Cari tahu IP lokal PC Anda (contoh: jalankan `ipconfig` di CMD Windows, temukan IPv4 Address seperti `192.168.1.5`).
+3. Jalankan **`camext_receiver.exe`** di PC Anda.
+4. Buka aplikasi **CamExt** di HP, masukkan IP Address PC Anda (misal: `192.168.1.5`) dan Port `4455`, lalu ketuk **MULAI STREAMING**.
 
 ---
 

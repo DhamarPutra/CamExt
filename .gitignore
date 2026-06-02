@@ -200,3 +200,4 @@ app.*.symbols
 claude.md
 compile*
 *.zip
+RELEASE_*
