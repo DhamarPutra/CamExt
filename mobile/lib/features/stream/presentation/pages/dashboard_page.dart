@@ -20,11 +20,6 @@ class DashboardPage extends StatefulWidget {
 class _DashboardPageState extends State<DashboardPage> {
   final _ipController = TextEditingController();
   final _portController = TextEditingController();
-
-  CameraController? _cameraController;
-  List<CameraDescription> _cameras = [];
-  bool _isCameraInitialized = false;
-  bool _isProcessingFrame = false;
   String _cameraError = '';
 
   @override
@@ -33,145 +28,21 @@ class _DashboardPageState extends State<DashboardPage> {
     _ipController.text = widget.notifier.value.config.ipAddress;
     _portController.text = widget.notifier.value.config.port.toString();
     
-    // Inisialisasi kamera & minta izin
-    _initCamera();
-
-    // Dengar status koneksi untuk menyalakan/mematikan stream kamera
-    widget.notifier.addListener(_onStreamStateChanged);
+    // Minta izin kamera saat aplikasi dibuka
+    _requestCameraPermission();
   }
 
-  Future<void> _initCamera() async {
+  Future<void> _requestCameraPermission() async {
     final status = await Permission.camera.request();
     if (!status.isGranted) {
       setState(() {
         _cameraError = 'Izin kamera ditolak. Silakan berikan izin di pengaturan.';
       });
-      return;
-    }
-
-    try {
-      _cameras = await availableCameras();
-      if (_cameras.isEmpty) {
-        setState(() {
-          _cameraError = 'Kamera fisik tidak ditemukan pada HP ini.';
-        });
-        return;
-      }
-
-      // Pilih kamera belakang default
-      final camera = _cameras.firstWhere(
-        (cam) => cam.lensDirection == CameraLensDirection.back,
-        orElse: () => _cameras.first,
-      );
-
-      // Dispose controller lama jika ada untuk menghindari memory leaks
-      if (_cameraController != null) {
-        _isCameraInitialized = false;
-        await _cameraController!.dispose();
-        _cameraController = null;
-      }
-
-      ResolutionPreset preset = ResolutionPreset.high; // default 720p
-      final width = widget.notifier.value.config.width;
-      if (width == 1920) {
-        preset = ResolutionPreset.veryHigh;
-      } else if (width == 1280) {
-        preset = ResolutionPreset.high;
-      } else if (width == 640) {
-        preset = ResolutionPreset.medium;
-      }
-
-      _cameraController = CameraController(
-        camera,
-        preset,
-        enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.yuv420,
-      );
-
-      await _cameraController!.initialize();
-      if (mounted) {
-        setState(() {
-          _isCameraInitialized = true;
-        });
-      }
-
-      // Jika sudah terhubung, langsung streaming
-      if (widget.notifier.value.status == ConnectionStatus.connected) {
-        _startImageStreaming();
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _cameraError = 'Gagal inisialisasi kamera: $e';
-        });
-      }
-    }
-  }
-
-  void _onStreamStateChanged() {
-    final status = widget.notifier.value.status;
-    if (status == ConnectionStatus.connected) {
-      _startImageStreaming();
-    } else if (status == ConnectionStatus.disconnected || status == ConnectionStatus.failed) {
-      _stopImageStreaming();
-    }
-  }
-
-  void _startImageStreaming() {
-    if (_cameraController == null || !_isCameraInitialized) return;
-    if (_cameraController!.value.isStreamingImages) return;
-
-    _isProcessingFrame = false;
-    _cameraController!.startImageStream((CameraImage image) async {
-      if (_isProcessingFrame) return;
-      _isProcessingFrame = true;
-
-      try {
-        final planeY = image.planes[0].bytes;
-        final planeU = image.planes[1].bytes;
-        final planeV = image.planes[2].bytes;
-
-        // Dapatkan sensor orientation agar rotasi gambar tegak lurus sempurna
-        final sensorOrientation = _cameraController!.description.sensorOrientation;
-
-        final jpegBytes = await PlatformChannelSource().yuvToJpeg(
-          y: planeY,
-          u: planeU,
-          v: planeV,
-          yRowStride: image.planes[0].bytesPerRow,
-          uRowStride: image.planes[1].bytesPerRow,
-          vRowStride: image.planes[2].bytesPerRow,
-          uPixelStride: image.planes[1].bytesPerPixel ?? 1,
-          vPixelStride: image.planes[2].bytesPerPixel ?? 1,
-          width: image.width,
-          height: image.height,
-          quality: 75,
-          rotation: sensorOrientation,
-        );
-
-        PlatformChannelSource().injectFrame(jpegBytes);
-      } catch (e) {
-        debugPrint('Frame conversion error: $e');
-      } finally {
-        _isProcessingFrame = false;
-      }
-    });
-  }
-
-  void _stopImageStreaming() {
-    if (_cameraController == null || !_isCameraInitialized) return;
-    if (!_cameraController!.value.isStreamingImages) return;
-    try {
-      _cameraController!.stopImageStream();
-    } catch (e) {
-      debugPrint('Error stopping image stream: $e');
     }
   }
 
   @override
   void dispose() {
-    widget.notifier.removeListener(_onStreamStateChanged);
-    _cameraController?.dispose();
     _ipController.dispose();
     _portController.dispose();
     super.dispose();
@@ -235,98 +106,68 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Widget _buildCameraPreview() {
+    final isStreaming = widget.notifier.value.status == ConnectionStatus.connected;
     return Container(
-      height: 240,
+      height: 180,
       decoration: BoxDecoration(
         color: AppTheme.cardBg,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppTheme.borderGlow, width: 1.5),
+        border: Border.all(
+          color: isStreaming ? AppTheme.accentNeonGreen : AppTheme.borderGlow, 
+          width: 1.5
+        ),
         boxShadow: [
           BoxShadow(
-            color: AppTheme.accentNeonCyan.withOpacity(0.05),
+            color: (isStreaming ? AppTheme.accentNeonGreen : AppTheme.accentNeonCyan).withOpacity(0.05),
             blurRadius: 10,
             spreadRadius: 1,
           ),
         ],
       ),
-      clipBehavior: Clip.antiAlias,
       child: Stack(
-        fit: StackFit.expand,
+        alignment: Alignment.center,
         children: [
-          if (_isCameraInitialized && _cameraController != null)
-            CameraPreview(_cameraController!)
-          else if (_cameraError.isNotEmpty)
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  _cameraError,
-                  style: const TextStyle(color: Colors.redAccent, fontSize: 14),
-                  textAlign: TextAlign.center,
+          if (isStreaming)
+            const Center(
+              child: SizedBox(
+                width: 100,
+                height: 100,
+                child: CircularProgressIndicator(
+                  color: AppTheme.accentNeonGreen,
+                  strokeWidth: 2,
                 ),
               ),
-            )
-          else
-            const Center(
-              child: CircularProgressIndicator(color: AppTheme.accentNeonCyan),
             ),
           
-          // Gradient Overlay
-          Positioned.fill(
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Colors.black.withOpacity(0.3),
-                    Colors.transparent,
-                    Colors.black.withOpacity(0.5),
-                  ],
+          Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                isStreaming ? Icons.sensors_rounded : Icons.videocam_off_rounded,
+                size: 48,
+                color: isStreaming ? AppTheme.accentNeonGreen : AppTheme.textMuted,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                isStreaming ? 'TRANSMISI LIVE AKTIF' : 'STREAMING NONAKTIF',
+                style: TextStyle(
+                  color: isStreaming ? AppTheme.accentNeonGreen : AppTheme.textMuted,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                  letterSpacing: 1.5,
                 ),
               ),
-            ),
-          ),
-
-          // Label
-          Positioned(
-            left: 16,
-            bottom: 16,
-            child: Row(
-              children: [
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: widget.notifier.value.status == ConnectionStatus.connected 
-                        ? AppTheme.accentNeonGreen 
-                        : Colors.amber,
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: (widget.notifier.value.status == ConnectionStatus.connected 
-                            ? AppTheme.accentNeonGreen 
-                            : Colors.amber).withOpacity(0.5),
-                        blurRadius: 6,
-                        spreadRadius: 2,
-                      ),
-                    ],
-                  ),
+              const SizedBox(height: 4),
+              Text(
+                isStreaming 
+                    ? 'Kamera Belakang -> PC via USB/Wi-Fi' 
+                    : 'Siap menghubungkan perangkat',
+                style: const TextStyle(
+                  color: AppTheme.textMuted,
+                  fontSize: 12,
                 ),
-                const SizedBox(width: 8),
-                Text(
-                  widget.notifier.value.status == ConnectionStatus.connected
-                      ? 'LIVE STREAMING'
-                      : 'KAMERA SIAP',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12,
-                    letterSpacing: 1.0,
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
         ],
       ),
@@ -615,7 +456,6 @@ class _DashboardPageState extends State<DashboardPage> {
                     isDisabled: isDisabled,
                     onChanged: (val) {
                       widget.notifier.updateResolution(1920, 1080);
-                      _initCamera();
                     },
                   ),
                 ),
@@ -628,7 +468,6 @@ class _DashboardPageState extends State<DashboardPage> {
                     isDisabled: isDisabled,
                     onChanged: (val) {
                       widget.notifier.updateResolution(1280, 720);
-                      _initCamera();
                     },
                   ),
                 ),
@@ -641,7 +480,6 @@ class _DashboardPageState extends State<DashboardPage> {
                     isDisabled: isDisabled,
                     onChanged: (val) {
                       widget.notifier.updateResolution(640, 480);
-                      _initCamera();
                     },
                   ),
                 ),

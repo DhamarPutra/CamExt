@@ -1,155 +1,250 @@
 package com.fujiwaracreative.camext
 
+import android.content.Context
 import android.graphics.ImageFormat
 import android.graphics.Rect
 import android.graphics.YuvImage
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
-import java.io.ByteArrayOutputStream
+import android.hardware.camera2.*
+import android.media.Image
+import android.media.ImageReader
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
+import android.view.Surface
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import java.io.ByteArrayOutputStream
+import java.io.OutputStream
+import java.net.Socket
 import java.util.concurrent.Executors
-import java.util.concurrent.ScheduledExecutorService
-import java.util.concurrent.TimeUnit
 
 class MainActivity : FlutterActivity() {
     private val CONTROL_CHANNEL = "com.fujiwaracreative.camext/control"
-    private val STREAM_CHANNEL = "com.fujiwaracreative.camext/stream"
 
-    private var eventSink: EventChannel.EventSink? = null
-    private var executorService: ScheduledExecutorService? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val socketExecutor = Executors.newSingleThreadExecutor()
 
-    private var isCapturing = false
-    private var mockFrameCount = 0
+    private var socket: Socket? = null
+    private var outputStream: OutputStream? = null
+    private var cameraDevice: CameraDevice? = null
+    private var captureSession: CameraCaptureSession? = null
+    private var imageReader: ImageReader? = null
+    private var sequenceNumber = 0
+    private var isStreamingNative = false
+    
+    private var cameraHandlerThread: HandlerThread? = null
+    private var cameraHandler: Handler? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // 1. Method Channel untuk mengontrol Start/Stop Capture Kamera & Encoder
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CONTROL_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "startCapture" -> {
-                    val codec = call.argument<Int>("codec") ?: 2
-                    val width = call.argument<Int>("width") ?: 1920
-                    val height = call.argument<Int>("height") ?: 1080
-                    val fps = call.argument<Int>("fps") ?: 60
+                    val ip = call.argument<String>("ip") ?: "127.0.0.1"
+                    val port = call.argument<Int>("port") ?: 4455
+                    val width = call.argument<Int>("width") ?: 1280
+                    val height = call.argument<Int>("height") ?: 720
 
-                    startMockCapture(codec, width, height, fps)
+                    startNativeCameraStream(ip, port, width, height)
                     result.success(null)
                 }
                 "stopCapture" -> {
-                    stopMockCapture()
+                    stopNativeCameraStream()
                     result.success(null)
-                }
-                "yuvToJpeg" -> {
-                    val y = call.argument<ByteArray>("y")
-                    val u = call.argument<ByteArray>("u")
-                    val v = call.argument<ByteArray>("v")
-                    val yRowStride = call.argument<Int>("yRowStride") ?: 0
-                    val uRowStride = call.argument<Int>("uRowStride") ?: 0
-                    val vRowStride = call.argument<Int>("vRowStride") ?: 0
-                    val uPixelStride = call.argument<Int>("uPixelStride") ?: 0
-                    val vPixelStride = call.argument<Int>("vPixelStride") ?: 0
-                    val width = call.argument<Int>("width") ?: 0
-                    val height = call.argument<Int>("height") ?: 0
-                    val quality = call.argument<Int>("quality") ?: 70
-                    val rotation = call.argument<Int>("rotation") ?: 0
-
-                    if (y != null && u != null && v != null && width > 0 && height > 0) {
-                        try {
-                            val jpegBytes = convertYuvToJpeg(
-                                y, u, v,
-                                yRowStride, uRowStride, vRowStride,
-                                uPixelStride, vPixelStride,
-                                width, height, quality
-                            )
-                            
-                            var finalJpeg = jpegBytes
-                            if (rotation != 0) {
-                                val bitmap = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
-                                if (bitmap != null) {
-                                    val matrix = Matrix()
-                                    matrix.postRotate(rotation.toFloat())
-                                    val rotatedBitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-                                    val outRotated = ByteArrayOutputStream()
-                                    rotatedBitmap.compress(Bitmap.CompressFormat.JPEG, quality, outRotated)
-                                    finalJpeg = outRotated.toByteArray()
-                                    bitmap.recycle()
-                                    rotatedBitmap.recycle()
-                                }
-                            }
-                            result.success(finalJpeg)
-                        } catch (e: Exception) {
-                            result.error("CONVERSION_ERROR", e.message, null)
-                        }
-                    } else {
-                        result.error("INVALID_ARGUMENTS", "Missing arguments", null)
-                    }
                 }
                 else -> {
                     result.notImplemented()
                 }
             }
         }
-
-        // 2. Event Channel untuk mengirimkan data terkompresi ke Dart (60 FPS)
-        EventChannel(flutterEngine.dartExecutor.binaryMessenger, STREAM_CHANNEL).setStreamHandler(
-            object : EventChannel.StreamHandler {
-                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-                    eventSink = events
-                }
-
-                override fun onCancel(arguments: Any?) {
-                    eventSink = null
-                    stopMockCapture()
-                }
-            }
-        )
     }
 
-    private fun startMockCapture(codec: Int, width: Int, height: Int, fps: Int) {
-        if (isCapturing) return
-        isCapturing = true
-        mockFrameCount = 0
+    private fun startNativeCameraStream(ip: String, port: Int, width: Int, height: Int) {
+        if (isStreamingNative) return
+        isStreamingNative = true
+        sequenceNumber = 0
 
-        executorService = Executors.newSingleThreadScheduledExecutor()
-        
-        // Menentukan interval waktu berdasarkan FPS target
-        val intervalMs = (1000 / fps).toLong()
+        cameraHandlerThread = HandlerThread("CameraHandlerThread").apply { start() }
+        cameraHandler = Handler(cameraHandlerThread!!.looper)
 
-        // Dummy payload untuk H.264 (NAL units tiruan) atau MJPEG
-        // Kami membuat data terkompresi tiruan seolah-olah ditransmisikan oleh hardware encoder
-        val dummyPayload = ByteArray(1024) { index -> (index % 256).toByte() }
-
-        executorService?.scheduleAtFixedRate({
-            if (!isCapturing) return@scheduleAtFixedRate
-
-            mockFrameCount++
-            
-            // Kirim frame tiruan ke Dart thread utama
-            mainHandler.post {
-                eventSink?.success(dummyPayload)
+        socketExecutor.submit {
+            try {
+                System.out.println("[*] Connecting native socket to $ip:$port...")
+                socket = Socket(ip, port)
+                outputStream = socket!!.getOutputStream()
+                System.out.println("[+] Socket connected! Initializing native camera...")
+                
+                mainHandler.post {
+                    initNativeCamera(width, height)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                stopNativeCameraStream()
             }
-        }, 0, intervalMs, TimeUnit.MILLISECONDS)
+        }
     }
 
-    private fun stopMockCapture() {
-        if (!isCapturing) return
-        isCapturing = false
-        
-        executorService?.shutdown()
+    private fun initNativeCamera(width: Int, height: Int) {
         try {
-            executorService?.awaitTermination(500, TimeUnit.MILLISECONDS)
-        } catch (e: InterruptedException) {
+            val cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val cameraId = cameraManager.cameraIdList.firstOrNull { id ->
+                val chars = cameraManager.getCameraCharacteristics(id)
+                chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+            } ?: cameraManager.cameraIdList[0]
+
+            imageReader = ImageReader.newInstance(width, height, ImageFormat.YUV_420_888, 3)
+            imageReader?.setOnImageAvailableListener({ reader ->
+                val image = reader.acquireLatestImage()
+                if (image != null) {
+                    if (isStreamingNative) {
+                        processAndSendFrame(image)
+                    }
+                    image.close()
+                }
+            }, cameraHandler)
+
+            cameraManager.openCamera(cameraId, object : CameraDevice.StateCallback() {
+                override fun onOpened(camera: CameraDevice) {
+                    cameraDevice = camera
+                    startNativeCaptureSession()
+                }
+
+                override fun onDisconnected(camera: CameraDevice) {
+                    stopNativeCameraStream()
+                }
+
+                override fun onError(camera: CameraDevice, error: Int) {
+                    System.err.println("[!] Native Camera error: $error")
+                    stopNativeCameraStream()
+                }
+            }, cameraHandler)
+        } catch (e: SecurityException) {
+            e.printStackTrace()
+            stopNativeCameraStream()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            stopNativeCameraStream()
+        }
+    }
+
+    private fun startNativeCaptureSession() {
+        val readerSurface = imageReader?.surface ?: return
+        val outputs = listOf(readerSurface)
+        
+        cameraDevice?.createCaptureSession(outputs, object : CameraCaptureSession.StateCallback() {
+            override fun onConfigured(session: CameraCaptureSession) {
+                captureSession = session
+                try {
+                    val builder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                    builder.addTarget(readerSurface)
+                    captureSession?.setRepeatingRequest(builder.build(), null, cameraHandler)
+                    System.out.println("[+] Native camera capture session active.")
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+
+            override fun onConfigureFailed(session: CameraCaptureSession) {
+                stopNativeCameraStream()
+            }
+        }, cameraHandler)
+    }
+
+    private fun processAndSendFrame(image: Image) {
+        try {
+            val width = image.width
+            val height = image.height
+            val planes = image.planes
+            val yBytes = ByteArray(planes[0].buffer.remaining()).also { planes[0].buffer.get(it) }
+            val uBytes = ByteArray(planes[1].buffer.remaining()).also { planes[1].buffer.get(it) }
+            val vBytes = ByteArray(planes[2].buffer.remaining()).also { planes[2].buffer.get(it) }
+
+            val yRowStride = planes[0].rowStride
+            val uRowStride = planes[1].rowStride
+            val vRowStride = planes[2].rowStride
+            val uPixelStride = planes[1].pixelStride
+            val vPixelStride = planes[2].pixelStride
+
+            val jpegBytes = convertYuvToJpeg(
+                yBytes, uBytes, vBytes,
+                yRowStride, uRowStride, vRowStride,
+                uPixelStride, vPixelStride,
+                width, height, 75
+            )
+
+            socketExecutor.submit {
+                try {
+                    val out = outputStream ?: return@submit
+                    val header = ByteArray(20)
+                    
+                    header[0] = 0xCA.toByte()
+                    header[1] = 0x5E.toByte()
+                    header[2] = 0xCA.toByte()
+                    header[3] = 0x5E.toByte()
+
+                    sequenceNumber++
+                    header[4] = (sequenceNumber ushr 24).toByte()
+                    header[5] = (sequenceNumber ushr 16).toByte()
+                    header[6] = (sequenceNumber ushr 8).toByte()
+                    header[7] = sequenceNumber.toByte()
+
+                    val ts = System.currentTimeMillis()
+                    header[8] = (ts ushr 24).toByte()
+                    header[9] = (ts ushr 16).toByte()
+                    header[10] = (ts ushr 8).toByte()
+                    header[11] = ts.toByte()
+
+                    header[12] = 1.toByte() // Codec MJPEG = 1
+
+                    val size = jpegBytes.size
+                    header[16] = (size ushr 24).toByte()
+                    header[17] = (size ushr 16).toByte()
+                    header[18] = (size ushr 8).toByte()
+                    header[19] = size.toByte()
+
+                    synchronized(this) {
+                        out.write(header)
+                        out.write(jpegBytes)
+                        out.flush()
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        } catch (e: Exception) {
             e.printStackTrace()
         }
-        executorService = null
+    }
+
+    private fun stopNativeCameraStream() {
+        if (!isStreamingNative) return
+        isStreamingNative = false
+        System.out.println("[*] Stopping native camera stream...")
+
+        try {
+            captureSession?.close()
+            captureSession = null
+            cameraDevice?.close()
+            cameraDevice = null
+            imageReader?.close()
+            imageReader = null
+            
+            outputStream?.close()
+            outputStream = null
+            socket?.close()
+            socket = null
+            
+            cameraHandlerThread?.quitSafely()
+            cameraHandlerThread = null
+            cameraHandler = null
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     private fun convertYuvToJpeg(
@@ -167,7 +262,6 @@ class MainActivity : FlutterActivity() {
     ): ByteArray {
         val nv21 = ByteArray(width * height * 3 / 2)
         
-        // Copy Y channel
         if (yRowStride == width) {
             System.arraycopy(y, 0, nv21, 0, width * height)
         } else {
@@ -180,7 +274,6 @@ class MainActivity : FlutterActivity() {
             }
         }
         
-        // Copy VU channel (interleaved V, U)
         val nvSize = width * height
         var pos = nvSize
         
@@ -218,7 +311,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
-        stopMockCapture()
+        stopNativeCameraStream()
         super.onDestroy()
     }
 }

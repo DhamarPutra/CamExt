@@ -163,9 +163,18 @@ bool DecodeJPEGToBGR24(IWICImagingFactory* pFactory, const uint8_t* jpegData, si
         return false;
     }
 
+    // Rotasi 90 derajat secara native via WIC Flip Rotator untuk mencocokkan orientasi portrait HP
+    IWICBitmapSource* pSource = pFrame;
+    IWICBitmapFlipRotator* pRotator = nullptr;
+    if (SUCCEEDED(pFactory->CreateBitmapFlipRotator(&pRotator))) {
+        if (SUCCEEDED(pRotator->Initialize(pFrame, WICBitmapTransformRotate90))) {
+            pSource = pRotator;
+        }
+    }
+
     // Ubah format piksel warna JPEG mentah ke GUID_WICPixelFormat24bppBGR (Sesuai dengan Windows GDI)
     hr = pConverter->Initialize(
-        pFrame,
+        pSource,
         GUID_WICPixelFormat24bppBGR,
         WICBitmapDitherTypeNone,
         NULL,
@@ -188,6 +197,9 @@ bool DecodeJPEGToBGR24(IWICImagingFactory* pFactory, const uint8_t* jpegData, si
         std::cerr << "[WIC Error] Gagal format conversion. HRESULT: 0x" << std::hex << hr << std::dec << std::endl;
     }
 
+    if (pRotator) {
+        pRotator->Release();
+    }
     pConverter->Release();
     pFrame->Release();
     pDecoder->Release();
