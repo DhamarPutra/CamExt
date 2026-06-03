@@ -5,18 +5,20 @@
 [![CMake](https://img.shields.io/badge/CMake-064F8C?style=for-the-badge&logo=cmake&logoColor=white)](https://cmake.org)
 [![OBS Studio](https://img.shields.io/badge/OBS_Studio-302E31?style=for-the-badge&logo=obs-studio&logoColor=white)](https://obsproject.com)
 
-**CamExt** adalah solusi kamera virtual *mobile-to-PC* berspesifikasi tinggi, berlatensi ultra-rendah, dan sangat ringan yang dirancang khusus untuk **OBS Studio**. Proyek ini merupakan alternatif DroidCam / Iriun Webcam berkinerja tinggi, yang memanfaatkan dekoder perangkat keras GPU Windows native (**WIC - Windows Imaging Component**) dan konversi piksel native Android untuk streaming video tanpa lag.
+**CamExt** adalah solusi kamera virtual *mobile-to-PC* berspesifikasi tinggi, berlatensi ultra-rendah, dan sangat ringan yang dirancang khusus untuk **OBS Studio**. Proyek ini merupakan alternatif DroidCam / Iriun Webcam berkinerja tinggi, yang memanfaatkan dekoder perangkat keras GPU Windows native (**WIC - Windows Imaging Component**) dan kompresi perangkat keras kamera Android untuk streaming video tanpa lag.
 
 ---
 
-## 🌟 Fitur Utama
+## 🌟 Fitur Utama (v1.0.2)
 
-- **⚡ Latensi Ultra-Rendah (< 50ms):** Penggunaan soket raw TCP/UDP asinkron yang dikombinasikan dengan optimasi `TCP_NODELAY` untuk pengiriman frame instan.
+- **⚡ Latensi Ultra-Rendah (< 50ms):** Penggunaan soket raw TCP asinkron yang dikombinasikan dengan optimasi `TCP_NODELAY` untuk pengiriman frame instan.
+- **📸 Akselerasi Hardware Encoder Camera2 (Baru):** Menggunakan `ImageFormat.JPEG` langsung dari sensor/ISP kamera handphone. Menghilangkan proses kompresi software CPU (`YuvImage.compressToJpeg`) sepenuhnya sehingga CPU handphone tetap dingin dan FPS stabil di **60 FPS** bahkan pada resolusi tinggi.
+- **🔇 Integrasi Audio Mikrofon Real-time (Baru):** Mendukung perekaman audio PCM 16-bit 48kHz Mono langsung dari mikrofon HP dan diputar secara real-time di PC menggunakan Windows native **waveOut API**.
 - **🖼️ Akselerasi Dekode Perangkat Keras GPU:** Menggunakan **Windows Imaging Component (WIC)** pada visualizer PC untuk mendekode frame JPEG secara langsung di GPU tanpa membebani CPU.
-- **🚀 Konverter YUV-ke-JPEG Native Android:** Memproses frame mentah kamera langsung pada tingkat native C++/Kotlin menggunakan `android.graphics.YuvImage` guna memotong bottleneck komunikasi Flutter Platform Channel.
+- **🔌 Deteksi Koneksi Cerdas & Full TCP (Baru):** Otomatis mendeteksi tipe koneksi (**🔌 USB ADB Mode** jika IP `127.0.0.1`, atau **📶 Wireless Mode** jika IP Wi-Fi PC dimasukkan). Protokol koneksi sepenuhnya menggunakan TCP yang stabil.
 - **📐 Rasio Aspek Cerdas (Flicker-Free):** Render layar visualizer PC pintar yang mengadopsi teknik *Pillarbox/Letterbox* otomatis. Tidak meregangkan gambar (*anti-stretching*) dan bebas kedipan (*flicker-free*).
-- **📱 Pilihan Resolusi Fleksibel:** Pengaturan resolusi langsung dari antarmuka HP (**1080p HQ**, **720p Balanced**, **480p Smooth/60FPS**).
-- **🔌 Koneksi Kabel USB (ADB Reverse):** Dukungan penuh untuk streaming via USB Debugging yang stabil dengan kestabilan mutlak tanpa gangguan interferensi sinyal Wi-Fi.
+- **📱 Pilihan Resolusi Dinamis (Baru):** Mendeteksi daftar resolusi kamera yang didukung secara dinamis dari perangkat keras HP (360p, 480p, 720p, 1080p, 2K, 4K).
+- **⚙️ Optimalisasi ISP Kamera (Baru):** Mematikan pemrosesan pasca-gambar yang berat (Noise Reduction, Edge Enhancement, Color Aberration Correction, Hot Pixel Correction) untuk performa maksimum dan latensi zero-delay.
 
 ---
 
@@ -27,10 +29,10 @@ Proyek ini terbagi menjadi dua bagian utama:
 ### 1. Klien Seluler (Flutter & Kotlin Native) - `/mobile`
 Klien Android dibangun menggunakan **Clean Architecture** (Domain, Data, dan Presentation layers) untuk kestabilan kode:
 - **Presentation Layer:** ValueNotifier untuk manajemen status UI reaktif rendah konsumsi memori, serta dashboard visual bertema gelap (*dark mode*) neon futuristik premium.
-- **Data Layer (Kotlin Native):** Pipeline penangkapan frame kamera mengabaikan pengiriman raw data ke Dart. Konversi dari YUV_420_888 ke JPEG beresolusi tinggi langsung dikerjakan oleh native thread Android dengan akselerasi GPU, kemudian dibungkus header biner 20-byte Big-Endian sebelum dilempar ke socket.
+- **Data Layer (Kotlin Native):** Pipeline penangkapan frame kamera mengabaikan pengiriman raw data ke Dart. Kamera dikonfigurasi untuk mengeluarkan data JPEG terkompresi perangkat keras, lalu dibungkus header biner 20-byte Big-Endian sebelum dikirim melalui socket TCP.
 
 ### 2. Penerima PC & Plugin OBS Studio (C++ & Win32) - `/obs`
-- **Standalone Visualizer (`camext_receiver.exe`):** Jendela preview super cepat Win32 API murni dengan akselerasi rendering GDI + WIC.
+- **Standalone Visualizer (`camext_receiver.exe`):** Jendela preview super cepat Win32 API murni dengan akselerasi rendering GDI + WIC dan pemutaran audio waveOut real-time.
 - **Plugin OBS Studio (`camext.dll`):** Plugin native C++ yang mendaftarkan sumber video secara langsung ke libobs pipeline render OBS Studio.
 
 ---
@@ -47,8 +49,8 @@ Buka PowerShell di dalam direktori `/obs` dan jalankan skrip kompilasi modular o
 powershell -ExecutionPolicy Bypass -File build.ps1
 ```
 Output biner:
-- [camext.dll] (file:obs/build/Release/camext.dll)
-- [camext_receiver.exe] (file:obs/build/Release/camext_receiver.exe)
+- [camext.dll](file:///d:/Project/OBSExtention/CamExt/obs/build/Release/camext.dll)
+- [camext_receiver.exe](file:///d:/Project/OBSExtention/CamExt/obs/build/Release/camext_receiver.exe)
 
 ### C. Kompilasi Aplikasi HP (Flutter)
 Jalankan perintah berikut di direktori `/mobile` untuk mem-build APK rilis:
@@ -61,8 +63,6 @@ File APK akan terbentuk di `mobile/build/app/outputs/flutter-apk/app-release.apk
 
 ## 🔌 Cara Penggunaan
 
-Anda dapat menggunakan CamExt baik via kabel USB (disarankan untuk latensi terendah) maupun jaringan Wi-Fi lokal.
-
 ### Opsi A: Menggunakan Kabel USB (Latensi Terendah / Stabil)
 1. Hubungkan HP Android ke PC via Kabel USB, pastikan **USB Debugging** di HP Anda telah diaktifkan.
 2. Buka Terminal/CMD di PC Anda dan jalankan perintah *port reverse forwarding*:
@@ -70,32 +70,13 @@ Anda dapat menggunakan CamExt baik via kabel USB (disarankan untuk latensi teren
    adb reverse tcp:4455 tcp:4455
    ```
 3. Jalankan **`camext_receiver.exe`** di PC Anda.
-4. Buka aplikasi **CamExt** di HP, masukkan IP Address `127.0.0.1` dan Port `4455`, lalu ketuk **MULAI STREAMING**.
+4. Buka aplikasi **CamExt** di HP, ketikkan IP Address `127.0.0.1` (aplikasi otomatis mendeteksi sebagai **USB Mode**) dan Port `4455`, nyalakan switch **Streaming Audio** jika diperlukan, lalu ketuk **MULAI STREAMING**.
 
 ### Opsi B: Menggunakan Wi-Fi (Nirkabel)
 1. Pastikan PC dan HP Android Anda terhubung ke **satu jaringan Wi-Fi / Router yang sama**.
 2. Cari tahu IP lokal PC Anda (contoh: jalankan `ipconfig` di CMD Windows, temukan IPv4 Address seperti `192.168.1.5`).
 3. Jalankan **`camext_receiver.exe`** di PC Anda.
-4. Buka aplikasi **CamExt** di HP, masukkan IP Address PC Anda (misal: `192.168.1.5`) dan Port `4455`, lalu ketuk **MULAI STREAMING**.
-
----
-
-## 🤝 Mari Berkolaborasi! (Open Collaboration)
-
-Proyek **CamExt** sepenuhnya merupakan proyek sumber terbuka (*open source*) yang menyambut hangat para kontributor untuk bergabung guna meningkatkan fitur, kestabilan, dan skalabilitas!
-
-### Area Kontribusi yang Sangat Dinantikan:
-- **🍏 Klien iOS (Swift):** Porting tangkapan kamera native AVFoundation dan konverter biner JPEG/H.264 ke soket untuk mendukung perangkat Apple iPhone.
-- **⚡ Hardware Encoding H.264/H.265 (Android & iOS):** Mengganti kompresi MJPEG dengan raw NAL units streaming menggunakan hardware encoder MediaCodec (Android) dan VideoToolbox (iOS) untuk pemangkasan *bandwidth* jaringan lebih jauh lagi.
-- **🖥️ Multiplatform Receiver:** Dukungan visualizer standalone untuk sistem operasi Linux dan macOS menggunakan OpenGL / Metal API.
-- **🎨 Peningkatan UI/UX:** Desain transisi, kontrol pengaturan kamera yang lebih dalam (ISO, white balance, fokus manual), dan visualisasi statistik jaringan yang interaktif di dashboard seluler.
-
-### Cara Berkontribusi:
-1. **Fork** repositori ini.
-2. Buat branch fitur Anda: `git checkout -b fitur/fitur-keren-anda`.
-3. Komit perubahan Anda: `git commit -m 'Menambahkan fitur keren'`.
-4. Push ke branch: `git push origin fitur/fitur-keren-anda`.
-5. Buka **Pull Request** baru!
+4. Buka aplikasi **CamExt** di HP, masukkan IP Address PC Anda (misal: `192.168.1.5`, aplikasi otomatis mendeteksi sebagai **Wireless Mode**) dan Port `4455`, lalu ketuk **MULAI STREAMING**.
 
 ---
 

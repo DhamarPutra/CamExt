@@ -53,10 +53,14 @@ class StreamNotifier extends ValueNotifier<StreamState> {
   }) : super(
           const StreamState(
             config: StreamConfig(
-              ipAddress: '192.168.1.100',
+              ipAddress: '127.0.0.1',
               port: 4455,
-              codec: VideoCodec.h264,
+              codec: VideoCodec.mjpeg,
               protocol: ConnectionProtocol.tcp,
+              width: 1280,
+              height: 720,
+              fps: 30,
+              enableAudio: false,
             ),
           ),
         );
@@ -122,6 +126,14 @@ class StreamNotifier extends ValueNotifier<StreamState> {
 
   void updateResolution(int width, int height) {
     value = value.copyWith(config: value.config.copyWith(width: width, height: height));
+  }
+
+  void updateResolutionAndFps(int width, int height, int fps) {
+    value = value.copyWith(config: value.config.copyWith(width: width, height: height, fps: fps));
+  }
+
+  void toggleAudio(bool enable) {
+    value = value.copyWith(config: value.config.copyWith(enableAudio: enable));
   }
 
   @override

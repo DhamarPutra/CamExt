@@ -6,7 +6,8 @@
 enum class CodecType : uint8_t {
     MJPEG = 1,
     H264 = 2,
-    H265 = 3
+    H265 = 3,
+    PCM_AUDIO = 10
 };
 
 class IDecoder {

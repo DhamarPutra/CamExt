@@ -11,8 +11,8 @@
     #include <fcntl.h>
 #endif
 
-SocketServer::SocketServer(FrameQueue& queue)
-    : queue_(queue), port_(0), use_tcp_(true), is_running_(false),
+SocketServer::SocketServer(FrameQueue& video_queue, FrameQueue* audio_queue)
+    : video_queue_(video_queue), audio_queue_(audio_queue), port_(0), use_tcp_(true), is_running_(false),
       server_fd_(INVALID_SOCKET), client_fd_(INVALID_SOCKET) {}
 
 SocketServer::~SocketServer() {
@@ -134,7 +134,11 @@ void SocketServer::RunTcpServer() {
 
             FramePacket packet;
             while (demuxer.ParseNextPacket(packet)) {
-                queue_.Push(std::move(packet));
+                if (packet.codec == CodecType::PCM_AUDIO && audio_queue_ != nullptr) {
+                    audio_queue_->Push(std::move(packet));
+                } else {
+                    video_queue_.Push(std::move(packet));
+                }
             }
         }
 
@@ -188,7 +192,11 @@ void SocketServer::RunUdpServer() {
 
         FramePacket packet;
         while (demuxer.ParseNextPacket(packet)) {
-            queue_.Push(std::move(packet));
+            if (packet.codec == CodecType::PCM_AUDIO && audio_queue_ != nullptr) {
+                audio_queue_->Push(std::move(packet));
+            } else {
+                video_queue_.Push(std::move(packet));
+            }
         }
     }
 }
