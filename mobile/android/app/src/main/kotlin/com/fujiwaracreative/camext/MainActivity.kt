@@ -31,6 +31,7 @@ class MainActivity : FlutterActivity() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val socketExecutor = Executors.newSingleThreadExecutor()
+    private val processExecutor = Executors.newFixedThreadPool(3)
 
     private var socket: Socket? = null
     private var outputStream: OutputStream? = null
@@ -114,13 +115,31 @@ class MainActivity : FlutterActivity() {
                 chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
             } ?: cameraManager.cameraIdList[0]
 
-            imageReader = ImageReader.newInstance(width, height, ImageFormat.YUV_420_888, 3)
+            imageReader = ImageReader.newInstance(width, height, ImageFormat.JPEG, 2)
             imageReader?.setOnImageAvailableListener({ reader ->
-                val image = reader.acquireLatestImage()
-                if (image != null) {
-                    if (isStreamingNative) {
-                        processAndSendFrame(image)
+                val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
+                if (!isStreamingNative) {
+                    image.close()
+                    return@setOnImageAvailableListener
+                }
+
+                try {
+                    val planes = image.planes
+                    if (planes.isNotEmpty()) {
+                        val buffer = planes[0].buffer
+                        val size = buffer.remaining()
+                        val jpegBytes = ByteArray(size)
+                        buffer.get(jpegBytes)
+                        image.close()
+
+                        processExecutor.submit {
+                            sendFrame(jpegBytes)
+                        }
+                    } else {
+                        image.close()
                     }
+                } catch (e: Exception) {
+                    e.printStackTrace()
                     image.close()
                 }
             }, cameraHandler)
@@ -157,8 +176,14 @@ class MainActivity : FlutterActivity() {
             override fun onConfigured(session: CameraCaptureSession) {
                 captureSession = session
                 try {
-                    val builder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                    val builder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
                     builder.addTarget(readerSurface)
+
+                    // Disable heavy image post-processing for minimum latency & maximum FPS
+                    try { builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF) } catch (e: Exception) {}
+                    try { builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF) } catch (e: Exception) {}
+                    try { builder.set(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_OFF) } catch (e: Exception) {}
+                    try { builder.set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_OFF) } catch (e: Exception) {}
 
                     // Konfigurasi target FPS range untuk mengaktifkan 60 FPS jika didukung
                     val cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -204,31 +229,11 @@ class MainActivity : FlutterActivity() {
         }, cameraHandler)
     }
 
-    private fun processAndSendFrame(image: Image) {
+    private fun sendFrame(jpegBytes: ByteArray) {
         try {
-            val width = image.width
-            val height = image.height
-            val planes = image.planes
-            val yBytes = ByteArray(planes[0].buffer.remaining()).also { planes[0].buffer.get(it) }
-            val uBytes = ByteArray(planes[1].buffer.remaining()).also { planes[1].buffer.get(it) }
-            val vBytes = ByteArray(planes[2].buffer.remaining()).also { planes[2].buffer.get(it) }
-
-            val yRowStride = planes[0].rowStride
-            val uRowStride = planes[1].rowStride
-            val vRowStride = planes[2].rowStride
-            val uPixelStride = planes[1].pixelStride
-            val vPixelStride = planes[2].pixelStride
-
-            val jpegBytes = convertYuvToJpeg(
-                yBytes, uBytes, vBytes,
-                yRowStride, uRowStride, vRowStride,
-                uPixelStride, vPixelStride,
-                width, height, 75
-            )
-
             socketExecutor.submit {
                 try {
-                    val out = outputStream ?: return@submit
+                    val outStream = outputStream ?: return@submit
                     val header = ByteArray(20)
                     
                     header[0] = 0xCA.toByte()
@@ -257,9 +262,9 @@ class MainActivity : FlutterActivity() {
                     header[19] = size.toByte()
 
                     synchronized(this) {
-                        out.write(header)
-                        out.write(jpegBytes)
-                        out.flush()
+                        outStream.write(header)
+                        outStream.write(jpegBytes)
+                        outStream.flush()
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()
@@ -415,10 +420,34 @@ class MainActivity : FlutterActivity() {
             val chars = cameraManager.getCameraCharacteristics(cameraId)
             val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             if (map != null) {
-                val sizes = map.getOutputSizes(ImageFormat.YUV_420_888)
+                val sizes = map.getOutputSizes(ImageFormat.JPEG)
                 if (sizes != null) {
+                    val bestSizes = mutableMapOf<Int, android.util.Size>()
                     for (size in sizes) {
-                        val minDuration = map.getOutputMinFrameDuration(ImageFormat.YUV_420_888, size)
+                        val h = size.height
+                        // Filter hanya tinggi standar streaming video (4K/2160p, 2K/1440p, 1080p, 720p, 480p, 360p)
+                        if (h == 2160 || h == 1440 || h == 1080 || h == 720 || h == 480 || h == 360) {
+                            val currentBest = bestSizes[h]
+                            if (currentBest == null) {
+                                bestSizes[h] = size
+                            } else {
+                                // Pilih rasio aspek yang paling mendekati 16:9 widescreen
+                                val currentAspect = currentBest.width.toFloat() / currentBest.height.toFloat()
+                                val newAspect = size.width.toFloat() / size.height.toFloat()
+                                val currentDiff = Math.abs(currentAspect - 1.7777778f)
+                                val newDiff = Math.abs(newAspect - 1.7777778f)
+                                if (newDiff < currentDiff) {
+                                    bestSizes[h] = size
+                                }
+                            }
+                        }
+                    }
+
+                    // Urutkan tinggi dari terbesar ke terkecil
+                    val sortedSizes = bestSizes.values.sortedByDescending { it.height }
+
+                    for (size in sortedSizes) {
+                        val minDuration = map.getOutputMinFrameDuration(ImageFormat.JPEG, size)
                         val maxFps = if (minDuration > 0) {
                             (1_000_000_000L / minDuration).toInt()
                         } else {
@@ -440,69 +469,6 @@ class MainActivity : FlutterActivity() {
             e.printStackTrace()
         }
         return list
-    }
-
-    private fun convertYuvToJpeg(
-        y: ByteArray,
-        u: ByteArray,
-        v: ByteArray,
-        yRowStride: Int,
-        uRowStride: Int,
-        vRowStride: Int,
-        uPixelStride: Int,
-        vPixelStride: Int,
-        width: Int,
-        height: Int,
-        quality: Int
-    ): ByteArray {
-        val nv21 = ByteArray(width * height * 3 / 2)
-        
-        if (yRowStride == width) {
-            System.arraycopy(y, 0, nv21, 0, width * height)
-        } else {
-            for (row in 0 until height) {
-                val srcPos = row * yRowStride
-                val length = Math.min(width, y.size - srcPos)
-                if (length > 0) {
-                    System.arraycopy(y, srcPos, nv21, row * width, length)
-                }
-            }
-        }
-        
-        val nvSize = width * height
-        var pos = nvSize
-        
-        val chromaHeight = height / 2
-        val chromaWidth = width / 2
-        
-        for (row in 0 until chromaHeight) {
-            val uRowOffset = row * uRowStride
-            val vRowOffset = row * vRowStride
-            
-            for (col in 0 until chromaWidth) {
-                val uIdx = uRowOffset + col * uPixelStride
-                val vIdx = vRowOffset + col * vPixelStride
-                
-                if (pos < nv21.size - 1) {
-                    if (vIdx >= 0 && vIdx < v.size) {
-                        nv21[pos++] = v[vIdx]
-                    } else {
-                        nv21[pos++] = 0
-                    }
-                    
-                    if (uIdx >= 0 && uIdx < u.size) {
-                        nv21[pos++] = u[uIdx]
-                    } else {
-                        nv21[pos++] = 0
-                    }
-                }
-            }
-        }
-        
-        val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
-        val out = ByteArrayOutputStream()
-        yuvImage.compressToJpeg(Rect(0, 0, width, height), quality, out)
-        return out.toByteArray()
     }
 
     override fun onDestroy() {
