@@ -9,16 +9,17 @@
 
 ---
 
-## 🌟 Fitur Utama (v1.0.2)
+## 🌟 Fitur Utama (v1.0.3)
 
 - **⚡ Latensi Ultra-Rendah (< 50ms):** Penggunaan soket raw TCP asinkron yang dikombinasikan dengan optimasi `TCP_NODELAY` untuk pengiriman frame instan.
-- **📸 Akselerasi Hardware Encoder Camera2 (Baru):** Menggunakan `ImageFormat.JPEG` langsung dari sensor/ISP kamera handphone. Menghilangkan proses kompresi software CPU (`YuvImage.compressToJpeg`) sepenuhnya sehingga CPU handphone tetap dingin dan FPS stabil di **60 FPS** bahkan pada resolusi tinggi.
-- **🔇 Integrasi Audio Mikrofon Real-time (Baru):** Mendukung perekaman audio PCM 16-bit 48kHz Mono langsung dari mikrofon HP dan diputar secara real-time di PC menggunakan Windows native **waveOut API**.
-- **🖼️ Akselerasi Dekode Perangkat Keras GPU:** Menggunakan **Windows Imaging Component (WIC)** pada visualizer PC untuk mendekode frame JPEG secara langsung di GPU tanpa membebani CPU.
-- **🔌 Deteksi Koneksi Cerdas & Full TCP (Baru):** Otomatis mendeteksi tipe koneksi (**🔌 USB ADB Mode** jika IP `127.0.0.1`, atau **📶 Wireless Mode** jika IP Wi-Fi PC dimasukkan). Protokol koneksi sepenuhnya menggunakan TCP yang stabil.
-- **📐 Rasio Aspek Cerdas (Flicker-Free):** Render layar visualizer PC pintar yang mengadopsi teknik *Pillarbox/Letterbox* otomatis. Tidak meregangkan gambar (*anti-stretching*) dan bebas kedipan (*flicker-free*).
-- **📱 Pilihan Resolusi Dinamis (Baru):** Mendeteksi daftar resolusi kamera yang didukung secara dinamis dari perangkat keras HP (360p, 480p, 720p, 1080p, 2K, 4K).
-- **⚙️ Optimalisasi ISP Kamera (Baru):** Mematikan pemrosesan pasca-gambar yang berat (Noise Reduction, Edge Enhancement, Color Aberration Correction, Hot Pixel Correction) untuk performa maksimum dan latensi zero-delay.
+- **📸 Akselerasi Hardware Encoder AVC/H.264 & HEVC/H.265:** Menggunakan kompresi perangkat keras bawaan perangkat Android (MediaCodec) untuk kompresi video H.264/H.265 berkinerja tinggi, menjaga FPS tetap stabil di **60 FPS** dengan penggunaan CPU minimum.
+- **🛡️ Dynamic Hardware Capability Check (Baru):** Otomatis mendeteksi batas kemampuan hardware encoder bawaan HP untuk resolusi yang dipilih (misal 1080p, 2K, 4K) dan melakukan fallback otomatis ke MJPEG dengan mulus jika tidak didukung.
+- **🔄 Auto Rotation & Stride-Aware (Baru):** Visualizer PC melakukan rotasi otomatis 90° CW untuk mode H.264 (sehingga orientasi sesuai) serta menangani dynamic stride padding memori dari GPU (flicker-free & crash-free).
+- **🔇 Integrasi Audio Mikrofon Real-time:** Mendukung perekaman audio PCM 16-bit 48kHz Mono langsung dari mikrofon HP dan diputar secara real-time di PC menggunakan Windows native **waveOut API**.
+- **🔌 Deteksi Koneksi Cerdas & Full TCP:** Otomatis mendeteksi tipe koneksi (**🔌 USB ADB Mode** jika IP `127.0.0.1`, atau **📶 Wireless Mode** jika IP Wi-Fi PC dimasukkan). Protokol koneksi sepenuhnya menggunakan TCP yang stabil.
+- **📐 Rasio Aspek Cerdas:** Render layar visualizer PC pintar yang mengadopsi teknik *Pillarbox/Letterbox* otomatis. Tidak meregangkan gambar (*anti-stretching*).
+- **📱 Pilihan Resolusi Dinamis:** Mendeteksi daftar resolusi kamera yang didukung secara dinamis dari perangkat keras HP (360p, 480p, 720p, 1080p, 2K, 4K).
+- **⚙️ Optimalisasi ISP Kamera:** Mematikan pemrosesan pasca-gambar yang berat (Noise Reduction, Edge Enhancement, Color Aberration Correction, Hot Pixel Correction) untuk performa maksimum dan latensi zero-delay.
 
 ---
 

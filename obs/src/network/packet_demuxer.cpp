@@ -25,8 +25,8 @@ bool PacketDemuxer::ParseNextPacket(FramePacket& out_packet) {
             continue;
         }
 
-        // 2. Baca Ukuran Payload (Byte ke 16 - 19)
-        uint32_t payload_size = ParseUint32BE(buffer_.data() + 16);
+        // 2. Baca Ukuran Payload (Byte ke 20 - 23)
+        uint32_t payload_size = ParseUint32BE(buffer_.data() + 20);
         size_t total_packet_size = HEADER_SIZE + payload_size;
 
         // 3. Pastikan seluruh paket payload telah terakumulasi di buffer
@@ -39,6 +39,10 @@ bool PacketDemuxer::ParseNextPacket(FramePacket& out_packet) {
         out_packet.sequence = ParseUint32BE(buffer_.data() + 4);
         out_packet.timestamp = ParseUint32BE(buffer_.data() + 8);
         out_packet.codec = static_cast<CodecType>(buffer_.data()[12]);
+
+        // Ekstraksi 16-bit Lebar dan Tinggi (Byte 14-15 dan 16-17)
+        out_packet.width = (static_cast<uint16_t>(buffer_.data()[14]) << 8) | buffer_.data()[15];
+        out_packet.height = (static_cast<uint16_t>(buffer_.data()[16]) << 8) | buffer_.data()[17];
 
         // 5. Salin Payload Terkompresi
         out_packet.payload.resize(payload_size);

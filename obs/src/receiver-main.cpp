@@ -9,6 +9,7 @@
 #include <thread>
 #include <atomic>
 #include "utils/frame_queue.h"
+#include "decoder/wmf_h264_decoder.h"
 
 #pragma comment(lib, "Windowscodecs.lib")
 #pragma comment(lib, "Shlwapi.lib")
@@ -308,8 +309,32 @@ void NetworkReceiveLoop(FrameQueue* queue, SocketServer* server) {
                 last_time = now;
             }
 
-            // Dekode payload JPEG dinamis langsung dari HP ke buffer BGR24
-            if (DecodeJPEGToBGR24(pFactory, packet.payload.data(), packet.payload.size(), decoded_bgr, width, height)) {
+            bool decode_success = false;
+            width = packet.width;
+            height = packet.height;
+
+            if (packet.codec == CodecType::H264) {
+                static WMFH264Decoder h264_decoder;
+                size_t out_size = decoded_bgr.capacity();
+                if (out_size < static_cast<size_t>(width * height * 3)) {
+                    decoded_bgr.resize(width * height * 3);
+                }
+                out_size = decoded_bgr.size();
+                decode_success = h264_decoder.Decode(packet.payload.data(), packet.payload.size(), decoded_bgr.data(), out_size, width, height);
+            } else {
+                decode_success = DecodeJPEGToBGR24(pFactory, packet.payload.data(), packet.payload.size(), decoded_bgr, width, height);
+            }
+
+            if (decode_success) {
+                static int last_width = 0;
+                static int last_height = 0;
+                if (width != last_width || height != last_height) {
+                    std::cout << "[Debug] Konfigurasi Kamera Aktif: " << width << "x" << height 
+                              << " (Codec: " << (packet.codec == CodecType::H264 ? "H.264" : "MJPEG") << ")" << std::endl;
+                    last_width = width;
+                    last_height = height;
+                }
+
                 // Salin secara aman ke buffer GUI utama
                 EnterCriticalSection(&g_buffer_cs);
                 g_rgb_buffer = std::move(decoded_bgr);
