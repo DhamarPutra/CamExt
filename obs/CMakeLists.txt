@@ -34,7 +34,7 @@ endif()
 # find_package(FFmpeg REQUIRED COMPONENTS avcodec avutil)
 # find_package(libjpeg-turbo REQUIRED)
 
-# --- TARGET KOMPILASI PLUGIN ---
+# --- TARGET COMPILATION PLUGIN ---
 
 if(HAS_OBS)
     add_library(camext SHARED
@@ -44,6 +44,8 @@ if(HAS_OBS)
         src/network/socket_server.h
         src/network/socket_server.cpp
         src/decoder/i_decoder.h
+        src/decoder/wmf_h264_decoder.h
+        src/decoder/wmf_h264_decoder.cpp
         src/utils/frame_queue.h
     )
 
@@ -59,9 +61,9 @@ if(HAS_OBS)
         target_link_libraries(camext PRIVATE libobs)
     endif()
 
-    # Tambahkan pustaka Socket khusus untuk Windows (Winsock)
+    # Tambahkan pustaka Socket & Media Foundation khusus untuk Windows
     if(WIN32)
-        target_link_libraries(camext PRIVATE ws2_32)
+        target_link_libraries(camext PRIVATE ws2_32 mfplat mfuuid ole32 wmcodecdspuuid)
         # Atur definisi unicode & fungsi Windows
         target_compile_definitions(camext PRIVATE _UNICODE UNICODE _CRT_SECURE_NO_WARNINGS)
     endif()
@@ -81,13 +83,15 @@ add_executable(camext_receiver
     src/network/socket_server.h
     src/network/socket_server.cpp
     src/decoder/i_decoder.h
+    src/decoder/wmf_h264_decoder.h
+    src/decoder/wmf_h264_decoder.cpp
     src/utils/frame_queue.h
 )
 
 target_include_directories(camext_receiver PRIVATE src)
 
 if(WIN32)
-    target_link_libraries(camext_receiver PRIVATE ws2_32)
+    target_link_libraries(camext_receiver PRIVATE ws2_32 mfplat mfuuid ole32 wmcodecdspuuid)
     target_compile_definitions(camext_receiver PRIVATE _UNICODE UNICODE _CRT_SECURE_NO_WARNINGS)
 endif()
 

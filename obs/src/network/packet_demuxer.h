@@ -9,6 +9,8 @@ struct FramePacket {
     uint32_t sequence;
     uint32_t timestamp;
     CodecType codec;
+    uint16_t width;
+    uint16_t height;
     std::vector<uint8_t> payload;
 };
 
@@ -31,5 +33,5 @@ public:
 private:
     std::vector<uint8_t> buffer_;
     static const uint32_t MAGIC_HEADER = 0xCA5ECA5E;
-    static const size_t HEADER_SIZE = 20;
+    static const size_t HEADER_SIZE = 24;
 };
