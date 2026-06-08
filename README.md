@@ -82,7 +82,7 @@ File APK akan terbentuk di `mobile/build/app/outputs/flutter-apk/app-release.apk
 ---
 
 ## 🎁 Support Me
-If you like the extension and you want to support the development - please consider to donate by [QRIS](https://github.com/DhamarPutra/db_image/blob/main/support.jpeg?raw=true). Any donations are greatly appreciated.
+If you like this app and you want to support the development - please consider to donate by [QRIS](https://github.com/DhamarPutra/db_image/blob/main/support.jpeg?raw=true). Any donations are greatly appreciated.
 
 ---
 
