@@ -15,7 +15,8 @@ public:
         uint8_t* output_buffer,
         size_t& output_size,
         int& out_width,
-        int& out_height
+        int& out_height,
+        bool is_front = false
     ) override;
 
 private:
@@ -26,4 +27,6 @@ private:
     bool is_initialized_ = false;
     int width_ = 0;
     int height_ = 0;
+    int requested_width_ = 0;
+    int requested_height_ = 0;
 };

@@ -39,6 +39,7 @@ bool PacketDemuxer::ParseNextPacket(FramePacket& out_packet) {
         out_packet.sequence = ParseUint32BE(buffer_.data() + 4);
         out_packet.timestamp = ParseUint32BE(buffer_.data() + 8);
         out_packet.codec = static_cast<CodecType>(buffer_.data()[12]);
+        out_packet.is_front = (buffer_.data()[13] == 1);
 
         // Ekstraksi 16-bit Lebar dan Tinggi (Byte 14-15 dan 16-17)
         out_packet.width = (static_cast<uint16_t>(buffer_.data()[14]) << 8) | buffer_.data()[15];

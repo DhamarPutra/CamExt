@@ -59,9 +59,13 @@ class MainActivity : FlutterActivity() {
     private var activeCodec = 1 // 1 = MJPEG, 2 = H264
     private var activeWidth = 1280
     private var activeHeight = 720
+    private val sessionVersion = java.util.concurrent.atomic.AtomicInteger(0)
     private var mediaCodec: MediaCodec? = null
     private var mediaCodecThread: Thread? = null
     private var encoderSurface: Surface? = null
+    
+    private var useFrontCamera = false
+    private var flashEnabled = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -87,6 +91,16 @@ class MainActivity : FlutterActivity() {
                     val resolutions = getSupportedResolutions()
                     result.success(resolutions)
                 }
+                "switchCamera" -> {
+                    val useFront = call.argument<Boolean>("useFront") ?: false
+                    setCameraLens(useFront)
+                    result.success(null)
+                }
+                "toggleFlash" -> {
+                    val enable = call.argument<Boolean>("enable") ?: false
+                    setFlash(enable)
+                    result.success(null)
+                }
                 else -> {
                     result.notImplemented()
                 }
@@ -97,6 +111,7 @@ class MainActivity : FlutterActivity() {
     private fun startNativeCameraStream(ip: String, port: Int, codec: Int, width: Int, height: Int, enableAudio: Boolean) {
         if (isStreamingNative) return
         isStreamingNative = true
+        val currentSession = sessionVersion.incrementAndGet()
         activeCodec = codec
         activeWidth = width
         activeHeight = height
@@ -126,7 +141,7 @@ class MainActivity : FlutterActivity() {
                 System.out.println("[+] Socket connected! Initializing native camera...")
 
                 mainHandler.post {
-                    initNativeCamera(width, height)
+                    initNativeCamera(width, height, currentSession)
                 }
 
                 if (enableAudio) {
@@ -142,20 +157,21 @@ class MainActivity : FlutterActivity() {
     private fun calculateBitrate(width: Int, height: Int): Int {
         val pixels = width * height
         return when {
-            pixels >= 3840 * 2160 -> 15_000_000 // 4K
-            pixels >= 2560 * 1440 -> 8_000_000  // 2K
-            pixels >= 1920 * 1080 -> 4_000_000  // 1080p
-            pixels >= 1280 * 720  -> 2_000_000  // 720p
-            else -> 1_000_000                  // 480p / 360p
+            pixels >= 3840 * 2160 -> 24_000_000 // 4K
+            pixels >= 2560 * 1440 -> 14_000_000 // 2K/1440p
+            pixels >= 1920 * 1080 -> 8_000_000  // 1080p
+            pixels >= 1280 * 720  -> 4_000_000  // 720p
+            else -> 2_000_000                  // 480p / 360p
         }
     }
 
-    private fun initNativeCamera(width: Int, height: Int) {
+    private fun initNativeCamera(width: Int, height: Int, version: Int) {
         try {
             val cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val targetLens = if (useFrontCamera) CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK
             val cameraId = cameraManager.cameraIdList.firstOrNull { id ->
                 val chars = cameraManager.getCameraCharacteristics(id)
-                chars.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+                chars.get(CameraCharacteristics.LENS_FACING) == targetLens
             } ?: cameraManager.cameraIdList[0]
 
             System.out.println("[Debug] initNativeCamera: ${width}x${height}, codec=${activeCodec}")
@@ -208,7 +224,7 @@ class MainActivity : FlutterActivity() {
                         val bufferInfo = MediaCodec.BufferInfo()
                         try {
                             mediaCodec!!.start()
-                            while (isStreamingNative && activeCodec == 2) {
+                            while (isStreamingNative && activeCodec == 2 && version == sessionVersion.get()) {
                                 val outputBufferIndex = mediaCodec!!.dequeueOutputBuffer(bufferInfo, 10000)
                                 if (outputBufferIndex >= 0) {
                                     val outputBuffer = mediaCodec!!.getOutputBuffer(outputBufferIndex)
@@ -217,7 +233,7 @@ class MainActivity : FlutterActivity() {
                                         outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
                                         val bytes = ByteArray(bufferInfo.size)
                                         outputBuffer.get(bytes)
-                                        sendH264Packet(bytes, bufferInfo.presentationTimeUs / 1000)
+                                        sendH264Packet(bytes, bufferInfo.presentationTimeUs / 1000, version)
                                     }
                                     mediaCodec!!.releaseOutputBuffer(outputBufferIndex, false)
                                 }
@@ -247,7 +263,7 @@ class MainActivity : FlutterActivity() {
                 imageReader = ImageReader.newInstance(width, height, ImageFormat.JPEG, 5)
                 imageReader?.setOnImageAvailableListener({ reader ->
                     val image = reader.acquireNextImage() ?: return@setOnImageAvailableListener
-                    if (!isStreamingNative) {
+                    if (!isStreamingNative || version != sessionVersion.get()) {
                         image.close()
                         return@setOnImageAvailableListener
                     }
@@ -263,9 +279,13 @@ class MainActivity : FlutterActivity() {
                                 image.close()
 
                                 socketExecutor.submit {
-                                    try {
-                                        sendFrameSync(jpegBytes)
-                                    } finally {
+                                    if (version == sessionVersion.get()) {
+                                        try {
+                                            sendFrameSync(jpegBytes, version)
+                                        } finally {
+                                            isSendingFrame.set(false)
+                                        }
+                                    } else {
                                         isSendingFrame.set(false)
                                     }
                                 }
@@ -323,12 +343,19 @@ class MainActivity : FlutterActivity() {
                     val builder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
                     builder.addTarget(cameraSurface)
 
-                    // Disable heavy image post-processing for minimum latency & maximum FPS
-                    try { builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF) } catch (e: Exception) {}
+                    // Enable high quality temporal noise reduction and disable edge enhancement to avoid amplifying noise
+                    try { builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY) } catch (e: Exception) {}
                     try { builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF) } catch (e: Exception) {}
-                    try { builder.set(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_OFF) } catch (e: Exception) {}
-                    try { builder.set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_OFF) } catch (e: Exception) {}
+                    try { builder.set(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY) } catch (e: Exception) {}
+                    try { builder.set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_HIGH_QUALITY) } catch (e: Exception) {}
                     try { builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON) } catch (e: Exception) {}
+                    
+                    // Flash Mode
+                    if (flashEnabled) {
+                        try { builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH) } catch (e: Exception) {}
+                    } else {
+                        try { builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF) } catch (e: Exception) {}
+                    }
 
                     // Konfigurasi target FPS range untuk mengaktifkan 30 FPS jika didukung
                     val cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
@@ -374,7 +401,8 @@ class MainActivity : FlutterActivity() {
         }, cameraHandler)
     }
 
-    private fun sendFrameSync(jpegBytes: ByteArray) {
+    private fun sendFrameSync(jpegBytes: ByteArray, version: Int) {
+        if (version != sessionVersion.get()) return
         try {
             val outStream = outputStream ?: return
             val header = ByteArray(24)
@@ -397,6 +425,7 @@ class MainActivity : FlutterActivity() {
             header[11] = ts.toByte()
 
             header[12] = 1.toByte() // Codec MJPEG = 1
+            header[13] = if (useFrontCamera) 1.toByte() else 0.toByte()
 
             // Tulis metadata Lebar dan Tinggi ke Header (Byte 14-15 dan 16-17)
             header[14] = (activeWidth ushr 8).toByte()
@@ -486,10 +515,12 @@ class MainActivity : FlutterActivity() {
         }.start()
     }
 
-    private fun sendH264Packet(h264Bytes: ByteArray, ptsMs: Long) {
+    private fun sendH264Packet(h264Bytes: ByteArray, ptsMs: Long, version: Int) {
         try {
+            if (version != sessionVersion.get()) return
             socketExecutor.submit {
                 try {
+                    if (version != sessionVersion.get()) return@submit
                     val outStream = outputStream ?: return@submit
                     val header = ByteArray(24)
                     
@@ -510,6 +541,7 @@ class MainActivity : FlutterActivity() {
                     header[11] = ptsMs.toByte()
 
                     header[12] = 2.toByte() // Codec H264 = 2
+                    header[13] = if (useFrontCamera) 1.toByte() else 0.toByte()
 
                     // Tulis metadata Lebar dan Tinggi ke Header (Byte 14-15 dan 16-17)
                     header[14] = (activeWidth ushr 8).toByte()
@@ -647,8 +679,7 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun getSupportedResolutions(): List<Map<String, Any>> {
-        val list = mutableListOf<Map<String, Any>>()
+    private fun isResolutionSupported(width: Int, height: Int): Boolean {
         try {
             val cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
             val cameraId = cameraManager.cameraIdList.firstOrNull { id ->
@@ -659,55 +690,106 @@ class MainActivity : FlutterActivity() {
             val chars = cameraManager.getCameraCharacteristics(cameraId)
             val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             if (map != null) {
-                val sizes = map.getOutputSizes(ImageFormat.JPEG)
-                if (sizes != null) {
-                    val bestSizes = mutableMapOf<Int, android.util.Size>()
-                    for (size in sizes) {
-                        val h = size.height
-                        // Filter hanya tinggi standar streaming video (4K/2160p, 2K/1440p, 1080p, 720p, 480p, 360p)
-                        if (h == 2160 || h == 1440 || h == 1080 || h == 720 || h == 480 || h == 360) {
-                            val currentBest = bestSizes[h]
-                            if (currentBest == null) {
-                                bestSizes[h] = size
-                            } else {
-                                // Pilih rasio aspek yang paling mendekati 16:9 widescreen
-                                val currentAspect = currentBest.width.toFloat() / currentBest.height.toFloat()
-                                val newAspect = size.width.toFloat() / size.height.toFloat()
-                                val currentDiff = Math.abs(currentAspect - 1.7777778f)
-                                val newDiff = Math.abs(newAspect - 1.7777778f)
-                                if (newDiff < currentDiff) {
-                                    bestSizes[h] = size
-                                }
+                val sizes = map.getOutputSizes(ImageFormat.JPEG) ?: emptyArray()
+                val cameraSupports = sizes.any { it.width == width && it.height == height }
+                if (!cameraSupports) return false
+            }
+
+            val codecList = MediaCodecList(MediaCodecList.REGULAR_CODECS)
+            for (info in codecList.codecInfos) {
+                if (!info.isEncoder) continue
+                for (type in info.supportedTypes) {
+                    if (type.equals(MediaFormat.MIMETYPE_VIDEO_AVC, ignoreCase = true)) {
+                        val caps = info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                        val videoCaps = caps?.videoCapabilities
+                        if (videoCaps != null) {
+                            if (videoCaps.isSizeSupported(width, height)) {
+                                return true
                             }
                         }
-                    }
-
-                    // Urutkan tinggi dari terbesar ke terkecil
-                    val sortedSizes = bestSizes.values.sortedByDescending { it.height }
-
-                    for (size in sortedSizes) {
-                        val minDuration = map.getOutputMinFrameDuration(ImageFormat.JPEG, size)
-                        val maxFps = if (minDuration > 0) {
-                            (1_000_000_000L / minDuration).toInt()
-                        } else {
-                            30
-                        }
-                        
-                        val displayFps = if (maxFps >= 60) 60 else if (maxFps >= 30) 30 else maxFps
-
-                        val item = mapOf(
-                            "width" to size.width,
-                            "height" to size.height,
-                            "maxFps" to displayFps
-                        )
-                        list.add(item)
                     }
                 }
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
+        return false
+    }
+
+    private fun getSupportedResolutions(): List<Map<String, Any>> {
+        val list = mutableListOf<Map<String, Any>>()
+        val targets = listOf(
+            android.util.Size(848, 480),
+            android.util.Size(1280, 720),
+            android.util.Size(1920, 1080),
+            android.util.Size(1920, 1440),
+            android.util.Size(2560, 1440),
+            android.util.Size(3840, 2160)
+        )
+
+        for (target in targets) {
+            val supported = isResolutionSupported(target.width, target.height)
+            list.add(mapOf(
+                "width" to target.width,
+                "height" to target.height,
+                "maxFps" to 30,
+                "supported" to supported
+            ))
+        }
         return list
+    }
+
+    private fun setCameraLens(useFront: Boolean) {
+        if (useFrontCamera == useFront) return
+        useFrontCamera = useFront
+        if (isStreamingNative) {
+            mainHandler.post {
+                val currentSession = sessionVersion.get()
+                // Stop camera & session
+                try { captureSession?.close(); captureSession = null } catch(e: Exception){}
+                try { cameraDevice?.close(); cameraDevice = null } catch(e: Exception){}
+                try { imageReader?.close(); imageReader = null } catch(e: Exception){}
+                // Re-open camera with the new lens direction
+                initNativeCamera(activeWidth, activeHeight, currentSession)
+            }
+        }
+    }
+
+    private fun setFlash(enable: Boolean) {
+        if (flashEnabled == enable) return
+        flashEnabled = enable
+        if (isStreamingNative) {
+            mainHandler.post {
+                try {
+                    val session = captureSession ?: return@post
+                    val builder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW) ?: return@post
+                    
+                    if (activeCodec == 2) {
+                        val surf = encoderSurface ?: return@post
+                        builder.addTarget(surf)
+                    } else {
+                        val reader = imageReader ?: return@post
+                        builder.addTarget(reader.surface)
+                    }
+                    
+                    try { builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_HIGH_QUALITY) } catch (e: Exception) {}
+                    try { builder.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF) } catch (e: Exception) {}
+                    try { builder.set(CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE, CaptureRequest.COLOR_CORRECTION_ABERRATION_MODE_HIGH_QUALITY) } catch (e: Exception) {}
+                    try { builder.set(CaptureRequest.HOT_PIXEL_MODE, CaptureRequest.HOT_PIXEL_MODE_HIGH_QUALITY) } catch (e: Exception) {}
+                    try { builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON) } catch (e: Exception) {}
+                    
+                    if (flashEnabled) {
+                        builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH)
+                    } else {
+                        builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
+                    }
+                    
+                    session.setRepeatingRequest(builder.build(), null, cameraHandler)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
     }
 
     override fun onDestroy() {

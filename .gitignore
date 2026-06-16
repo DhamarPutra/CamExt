@@ -201,3 +201,4 @@ claude.md
 compile*
 *.zip
 RELEASE_*
+web/

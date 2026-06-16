@@ -94,13 +94,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
             EnterCriticalSection(&g_buffer_cs);
             if (!g_rgb_buffer.empty() && g_frame_width > 0 && g_frame_height > 0) {
-                // Konfigurasi struktur data piksel Bitmap (Windows DIB mengharapkan BGR24 secara default)
+                // Konfigurasi struktur data piksel Bitmap (Windows DIB mengharapkan BGRA32)
                 BITMAPINFO bmi = {0};
                 bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
                 bmi.bmiHeader.biWidth = g_frame_width;
                 bmi.bmiHeader.biHeight = -g_frame_height; // Negatif agar render dari atas ke bawah
                 bmi.bmiHeader.biPlanes = 1;
-                bmi.bmiHeader.biBitCount = 24; // BGR 24-bit
+                bmi.bmiHeader.biBitCount = 32; // BGRA 32-bit
                 bmi.bmiHeader.biCompression = BI_RGB;
 
                 // Dapatkan ukuran area client jendela saat ini
@@ -184,111 +184,54 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     }
 }
 
-// Fungsi bantu untuk mendekode buffer JPEG (dari HP) menjadi RGB24 menggunakan Windows Imaging Component (WIC)
-bool DecodeJPEGToBGR24(IWICImagingFactory* pFactory, const uint8_t* jpegData, size_t dataSize, std::vector<uint8_t>& outBGR, int& outWidth, int& outHeight) {
-    if (!pFactory || !jpegData || dataSize == 0) return false;
+// WIC JPEG Decoder is now handled by the WICJPEGDecoder class.
 
-    IStream* pStream = SHCreateMemStream(jpegData, static_cast<UINT>(dataSize));
-    if (!pStream) return false;
+#include "decoder/wic_jpeg_decoder.h"
 
-    IWICBitmapDecoder* pDecoder = nullptr;
-    HRESULT hr = pFactory->CreateDecoderFromStream(pStream, NULL, WICDecodeMetadataCacheOnDemand, &pDecoder);
-    pStream->Release();
-    if (FAILED(hr)) {
-        std::cerr << "[WIC Error] Gagal CreateDecoderFromStream. HRESULT: 0x" << std::hex << hr 
-                  << " | Ukuran Data: " << std::dec << dataSize << " byte" << std::endl;
-        // Print 4 byte pertama payload untuk memverifikasi jika itu signature JPEG (0xFFD8FF...)
-        if (dataSize >= 4) {
-            std::cerr << "[Info] 4 Byte pertama: 0x" 
-                      << std::hex << (int)jpegData[0] << " 0x" << (int)jpegData[1] 
-                      << " 0x" << (int)jpegData[2] << " 0x" << (int)jpegData[3] << std::dec << std::endl;
-        }
-        return false;
+void ResizeWindowToFrame(HWND hwnd, int width, int height) {
+    if (!hwnd) return;
+
+    // Dapatkan ukuran monitor utama
+    int screenWidth = GetSystemMetrics(SM_CXSCREEN);
+    int screenHeight = GetSystemMetrics(SM_CYSCREEN);
+
+    // Tentukan ukuran maksimal area client (80% dari resolusi layar)
+    int maxClientWidth = (screenWidth * 8) / 10;
+    int maxClientHeight = (screenHeight * 8) / 10;
+
+    int destWidth = width;
+    int destHeight = height;
+
+    float aspect = (float)width / (float)height;
+    if (destWidth > maxClientWidth) {
+        destWidth = maxClientWidth;
+        destHeight = (int)(destWidth / aspect);
+    }
+    if (destHeight > maxClientHeight) {
+        destHeight = maxClientHeight;
+        destWidth = (int)(destHeight * aspect);
     }
 
-    IWICBitmapFrameDecode* pFrame = nullptr;
-    hr = pDecoder->GetFrame(0, &pFrame);
-    if (FAILED(hr)) {
-        std::cerr << "[WIC Error] Gagal GetFrame. HRESULT: 0x" << std::hex << hr << std::dec << std::endl;
-        pDecoder->Release();
-        return false;
-    }
+    DWORD style = GetWindowLong(hwnd, GWL_STYLE);
+    DWORD exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+    HMENU menu = GetMenu(hwnd);
 
-    IWICFormatConverter* pConverter = nullptr;
-    hr = pFactory->CreateFormatConverter(&pConverter);
-    if (FAILED(hr)) {
-        pFrame->Release();
-        pDecoder->Release();
-        return false;
-    }
+    RECT rect = {0, 0, destWidth, destHeight};
+    AdjustWindowRectEx(&rect, style, menu != nullptr, exStyle);
 
-    // Rotasi 90 derajat secara native via WIC Flip Rotator untuk mencocokkan orientasi portrait HP
-    IWICBitmapSource* pSource = pFrame;
-    IWICBitmapFlipRotator* pRotator = nullptr;
-    if (SUCCEEDED(pFactory->CreateBitmapFlipRotator(&pRotator))) {
-        if (SUCCEEDED(pRotator->Initialize(pFrame, WICBitmapTransformRotate90))) {
-            pSource = pRotator;
-        }
-    }
+    int winWidth = rect.right - rect.left;
+    int winHeight = rect.bottom - rect.top;
 
-    // Ubah format piksel warna JPEG mentah ke GUID_WICPixelFormat24bppBGR (Sesuai dengan Windows GDI)
-    hr = pConverter->Initialize(
-        pSource,
-        GUID_WICPixelFormat24bppBGR,
-        WICBitmapDitherTypeNone,
-        NULL,
-        0.0f,
-        WICBitmapPaletteTypeCustom
-    );
+    int posX = (screenWidth - winWidth) / 2;
+    int posY = (screenHeight - winHeight) / 2;
+    if (posX < 0) posX = 0;
+    if (posY < 0) posY = 0;
 
-    if (SUCCEEDED(hr)) {
-        UINT width = 0, height = 0;
-        pConverter->GetSize(&width, &height);
-        
-        outWidth = static_cast<int>(width);
-        outHeight = static_cast<int>(height);
-
-        UINT stride = width * 3;
-        outBGR.resize(stride * height);
-
-        hr = pConverter->CopyPixels(NULL, stride, static_cast<UINT>(outBGR.size()), outBGR.data());
-    } else {
-        std::cerr << "[WIC Error] Gagal format conversion. HRESULT: 0x" << std::hex << hr << std::dec << std::endl;
-    }
-
-    if (pRotator) {
-        pRotator->Release();
-    }
-    pConverter->Release();
-    pFrame->Release();
-    pDecoder->Release();
-
-    return SUCCEEDED(hr);
+    SetWindowPos(hwnd, NULL, posX, posY, winWidth, winHeight, SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
-// Thread khusus untuk menerima paket socket dan mendekode frame JPEG secara non-blocking
+// Thread khusus untuk menerima paket socket dan mendekode frame secara non-blocking
 void NetworkReceiveLoop(FrameQueue* queue, SocketServer* server) {
-    // Inisialisasi COM untuk WIC pada thread jaringan ini
-    HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
-    if (FAILED(hr)) {
-        std::cerr << "[Error] Gagal menginisialisasi COM di Thread Jaringan!" << std::endl;
-        return;
-    }
-
-    IWICImagingFactory* pFactory = nullptr;
-    hr = CoCreateInstance(
-        CLSID_WICImagingFactory,
-        NULL,
-        CLSCTX_INPROC_SERVER,
-        IID_PPV_ARGS(&pFactory)
-    );
-
-    if (FAILED(hr)) {
-        std::cerr << "[Error] Gagal membuat WIC Imaging Factory!" << std::endl;
-        CoUninitialize();
-        return;
-    }
-
     FramePacket packet;
     int frame_count = 0;
     auto last_time = std::chrono::steady_clock::now();
@@ -316,13 +259,19 @@ void NetworkReceiveLoop(FrameQueue* queue, SocketServer* server) {
             if (packet.codec == CodecType::H264) {
                 static WMFH264Decoder h264_decoder;
                 size_t out_size = decoded_bgr.capacity();
-                if (out_size < static_cast<size_t>(width * height * 3)) {
-                    decoded_bgr.resize(width * height * 3);
+                if (out_size < static_cast<size_t>(width * height * 4)) {
+                    decoded_bgr.resize(width * height * 4);
                 }
                 out_size = decoded_bgr.size();
-                decode_success = h264_decoder.Decode(packet.payload.data(), packet.payload.size(), decoded_bgr.data(), out_size, width, height);
+                decode_success = h264_decoder.Decode(packet.payload.data(), packet.payload.size(), decoded_bgr.data(), out_size, width, height, packet.is_front);
             } else {
-                decode_success = DecodeJPEGToBGR24(pFactory, packet.payload.data(), packet.payload.size(), decoded_bgr, width, height);
+                static WICJPEGDecoder jpeg_decoder;
+                size_t out_size = decoded_bgr.capacity();
+                if (out_size < static_cast<size_t>(width * height * 4)) {
+                    decoded_bgr.resize(width * height * 4);
+                }
+                out_size = decoded_bgr.size();
+                decode_success = jpeg_decoder.Decode(packet.payload.data(), packet.payload.size(), decoded_bgr.data(), out_size, width, height, packet.is_front);
             }
 
             if (decode_success) {
@@ -333,6 +282,9 @@ void NetworkReceiveLoop(FrameQueue* queue, SocketServer* server) {
                               << " (Codec: " << (packet.codec == CodecType::H264 ? "H.264" : "MJPEG") << ")" << std::endl;
                     last_width = width;
                     last_height = height;
+                    
+                    // Lakukan resize window agar sesuai aspect ratio frame
+                    ResizeWindowToFrame(g_hwnd, width, height);
                 }
 
                 // Salin secara aman ke buffer GUI utama
@@ -352,9 +304,6 @@ void NetworkReceiveLoop(FrameQueue* queue, SocketServer* server) {
             }
         }
     }
-
-    if (pFactory) pFactory->Release();
-    CoUninitialize();
 }
 
 void AudioReceiveLoop(FrameQueue* audio_queue) {

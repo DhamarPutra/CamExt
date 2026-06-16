@@ -9,6 +9,7 @@ struct FramePacket {
     uint32_t sequence;
     uint32_t timestamp;
     CodecType codec;
+    bool is_front;
     uint16_t width;
     uint16_t height;
     std::vector<uint8_t> payload;
