@@ -7,18 +7,23 @@ import '../../domain/usecases/get_connection_status.dart';
 import '../../domain/usecases/get_stream_stats.dart';
 import '../../domain/usecases/start_stream.dart';
 import '../../domain/usecases/stop_stream.dart';
+import '../../data/datasources/platform_channel_source.dart';
 
 class StreamState {
   final StreamConfig config;
   final ConnectionStatus status;
   final StreamStats stats;
   final String? errorMessage;
+  final bool useFrontCamera;
+  final bool flashEnabled;
 
   const StreamState({
     required this.config,
     this.status = ConnectionStatus.disconnected,
     this.stats = const StreamStats(),
     this.errorMessage,
+    this.useFrontCamera = false,
+    this.flashEnabled = false,
   });
 
   StreamState copyWith({
@@ -26,12 +31,16 @@ class StreamState {
     ConnectionStatus? status,
     StreamStats? stats,
     String? errorMessage,
+    bool? useFrontCamera,
+    bool? flashEnabled,
   }) {
     return StreamState(
       config: config ?? this.config,
       status: status ?? this.status,
       stats: stats ?? this.stats,
       errorMessage: errorMessage ?? this.errorMessage,
+      useFrontCamera: useFrontCamera ?? this.useFrontCamera,
+      flashEnabled: flashEnabled ?? this.flashEnabled,
     );
   }
 }
@@ -134,6 +143,18 @@ class StreamNotifier extends ValueNotifier<StreamState> {
 
   void toggleAudio(bool enable) {
     value = value.copyWith(config: value.config.copyWith(enableAudio: enable));
+  }
+
+  Future<void> toggleCamera() async {
+    final nextUseFront = !value.useFrontCamera;
+    value = value.copyWith(useFrontCamera: nextUseFront);
+    await PlatformChannelSource().switchCamera(nextUseFront);
+  }
+
+  Future<void> toggleFlash() async {
+    final nextFlash = !value.flashEnabled;
+    value = value.copyWith(flashEnabled: nextFlash);
+    await PlatformChannelSource().toggleFlash(nextFlash);
   }
 
   @override

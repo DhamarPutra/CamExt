@@ -8,72 +8,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # --- DETEKSI DEPENDENSI & SDK ---
-
-# Pilihan path SDK eksternal untuk Windows (diarahkan ke obs-sdk lokal kita agar instan)
-set(OBS_SDK_PATH "${CMAKE_CURRENT_SOURCE_DIR}/obs-sdk" CACHE PATH "Path to OBS Studio SDK")
-
-set(HAS_OBS OFF)
-
-if(OBS_SDK_PATH AND EXISTS "${OBS_SDK_PATH}/include")
-    include_directories(${OBS_SDK_PATH}/include)
-    link_directories(${OBS_SDK_PATH}/win64)
-    message(STATUS "Menggunakan OBS SDK dari: ${OBS_SDK_PATH}")
-    set(HAS_OBS ON)
-else()
-    # Deteksi standar via pkg-config atau CMake Modules secara opsional
-    find_package(libobs QUIET)
-    if(libobs_FOUND)
-        set(HAS_OBS ON)
-        message(STATUS "libobs berhasil ditemukan!")
-    else()
-        message(WARNING "libobs tidak ditemukan! Target DLL plugin 'camext' dilewati. Hanya target standalone 'camext_receiver' yang akan dibangun.")
-    endif()
-endif()
+# OBS SDK checks removed.
 
 # Dependensi tambahan untuk Decoder (akan digunakan pada perluasan implementasi)
 # find_package(FFmpeg REQUIRED COMPONENTS avcodec avutil)
 # find_package(libjpeg-turbo REQUIRED)
 
-# --- TARGET COMPILATION PLUGIN ---
-
-if(HAS_OBS)
-    add_library(camext SHARED
-        src/obs-plugin-main.cpp
-        src/network/packet_demuxer.h
-        src/network/packet_demuxer.cpp
-        src/network/socket_server.h
-        src/network/socket_server.cpp
-        src/decoder/i_decoder.h
-        src/decoder/wmf_h264_decoder.h
-        src/decoder/wmf_h264_decoder.cpp
-        src/utils/frame_queue.h
-    )
-
-    # Konfigurasi include path internal
-    target_include_directories(camext PRIVATE
-        src
-    )
-
-    # Tautkan library OBS Studio
-    if(OBS_SDK_PATH)
-        target_link_libraries(camext PRIVATE obs)
-    else()
-        target_link_libraries(camext PRIVATE libobs)
-    endif()
-
-    # Tambahkan pustaka Socket & Media Foundation khusus untuk Windows
-    if(WIN32)
-        target_link_libraries(camext PRIVATE ws2_32 mfplat mfuuid ole32 wmcodecdspuuid)
-        # Atur definisi unicode & fungsi Windows
-        target_compile_definitions(camext PRIVATE _UNICODE UNICODE _CRT_SECURE_NO_WARNINGS)
-    endif()
-
-    # Set penamaan prefix keluaran agar bersih (misal camext.dll bukan libcamext.dll di Windows)
-    set_target_properties(camext PROPERTIES
-        PREFIX ""
-        SUFFIX ${CMAKE_SHARED_LIBRARY_SUFFIX}
-    )
-endif()
+# --- TARGET COMPILATION PLUGIN REMOVED ---
+# OBS Plugin camext has been disabled/removed per user request.
 
 # --- TARGET EXECUTABLE MANDIRI (STANDALONE RECEIVER) ---
 add_executable(camext_receiver
@@ -85,6 +27,8 @@ add_executable(camext_receiver
     src/decoder/i_decoder.h
     src/decoder/wmf_h264_decoder.h
     src/decoder/wmf_h264_decoder.cpp
+    src/decoder/wic_jpeg_decoder.h
+    src/decoder/wic_jpeg_decoder.cpp
     src/utils/frame_queue.h
 )
 
@@ -93,5 +37,9 @@ target_include_directories(camext_receiver PRIVATE src)
 if(WIN32)
     target_link_libraries(camext_receiver PRIVATE ws2_32 mfplat mfuuid ole32 wmcodecdspuuid)
     target_compile_definitions(camext_receiver PRIVATE _UNICODE UNICODE _CRT_SECURE_NO_WARNINGS)
+endif()
+
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(camext_receiver PRIVATE OpenMP::OpenMP_CXX)
 endif()
 

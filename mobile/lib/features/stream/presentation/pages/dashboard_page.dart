@@ -38,11 +38,15 @@ class _DashboardPageState extends State<DashboardPage> {
     setState(() {
       _supportedResolutions = res;
     });
-    // Set the first available resolution as active config
+    // Set the first supported resolution as active config
     if (res.isNotEmpty) {
-      final width = res.first['width'] as int;
-      final height = res.first['height'] as int;
-      final maxFps = res.first['maxFps'] as int;
+      final active = res.firstWhere(
+        (item) => item['supported'] as bool? ?? true,
+        orElse: () => res.first,
+      );
+      final width = active['width'] as int;
+      final height = active['height'] as int;
+      final maxFps = active['maxFps'] as int;
       widget.notifier.updateResolutionAndFps(width, height, maxFps);
     }
   }
@@ -92,7 +96,7 @@ class _DashboardPageState extends State<DashboardPage> {
                     const SizedBox(height: 24),
 
                     // Camera Preview
-                    _buildCameraPreview(),
+                    _buildCameraPreview(state),
                     const SizedBox(height: 24),
 
                     // Status Indicator Glow Card
@@ -121,8 +125,8 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
-  Widget _buildCameraPreview() {
-    final isStreaming = widget.notifier.value.status == ConnectionStatus.connected;
+  Widget _buildCameraPreview(StreamState state) {
+    final isStreaming = state.status == ConnectionStatus.connected;
     return Container(
       height: 180,
       decoration: BoxDecoration(
@@ -176,7 +180,7 @@ class _DashboardPageState extends State<DashboardPage> {
               const SizedBox(height: 4),
               Text(
                 isStreaming 
-                    ? 'Kamera Belakang -> PC via USB/Wi-Fi' 
+                    ? '${state.useFrontCamera ? "Kamera Depan" : "Kamera Belakang"} -> PC via USB/Wi-Fi' 
                     : 'Siap menghubungkan perangkat',
                 style: const TextStyle(
                   color: AppTheme.textMuted,
@@ -184,6 +188,51 @@ class _DashboardPageState extends State<DashboardPage> {
                 ),
               ),
             ],
+          ),
+
+          // Camera Lens & Flash Overlay Controls
+          Positioned(
+            top: 12,
+            right: 12,
+            child: Row(
+              children: [
+                // Flash Toggle
+                IconButton(
+                  icon: Icon(
+                    state.flashEnabled ? Icons.flash_on_rounded : Icons.flash_off_rounded,
+                    color: state.flashEnabled ? AppTheme.accentNeonCyan : AppTheme.textMuted,
+                  ),
+                  onPressed: () {
+                    widget.notifier.toggleFlash();
+                  },
+                  style: IconButton.styleFrom(
+                    backgroundColor: const Color(0xFF1B1E2E),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      side: const BorderSide(color: Color(0xFF2C314C), width: 1),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                // Camera Lens Toggle
+                IconButton(
+                  icon: Icon(
+                    state.useFrontCamera ? Icons.camera_front_rounded : Icons.camera_rear_rounded,
+                    color: AppTheme.accentNeonCyan,
+                  ),
+                  onPressed: () {
+                    widget.notifier.toggleCamera();
+                  },
+                  style: IconButton.styleFrom(
+                    backgroundColor: const Color(0xFF1B1E2E),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      side: const BorderSide(color: Color(0xFF2C314C), width: 1),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -487,8 +536,9 @@ class _DashboardPageState extends State<DashboardPage> {
                   final w = item['width'] as int;
                   final h = item['height'] as int;
                   final maxFps = item['maxFps'] as int;
+                  final isSupported = item['supported'] as bool? ?? true;
                   
-                  final title = '${h}p (${maxFps} FPS)';
+                  final title = isSupported ? '${h}p (${maxFps} FPS)' : '${h}p (Unsupported)';
                   
                   return SizedBox(
                     width: (MediaQuery.of(context).size.width - 68) / 2, // 2 items per row
@@ -496,7 +546,7 @@ class _DashboardPageState extends State<DashboardPage> {
                       title: title,
                       value: w,
                       groupValue: state.config.width,
-                      isDisabled: isDisabled,
+                      isDisabled: isDisabled || !isSupported,
                       onChanged: (val) {
                         widget.notifier.updateResolutionAndFps(w, h, maxFps);
                       },

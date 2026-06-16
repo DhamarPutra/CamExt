@@ -28,6 +28,7 @@ public:
         uint8_t* output_buffer,
         size_t& output_size,
         int& out_width,
-        int& out_height
+        int& out_height,
+        bool is_front = false
     ) = 0;
 };

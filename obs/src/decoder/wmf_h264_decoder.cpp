@@ -8,23 +8,25 @@
 #pragma comment(lib, "Ole32.lib")
 #pragma comment(lib, "wmcodecdspuuid.lib")
 
-// Helper: Convert NV12 to BGR24 WITH 90-degree clockwise rotation (portrait→landscape)
+// Helper: Convert NV12 to BGRA32 WITH 90-degree clockwise rotation (portrait→landscape)
 // Input: width×height (portrait, e.g. 1080×1920) → Output: height×width (landscape, e.g. 1920×1080)
-static void NV12ToBGR24_Rotate90CW(const uint8_t* nv12, int nv12_stride, uint8_t* bgr, int in_width, int in_height) {
+static void NV12ToBGRA32_Rotate90CW(const uint8_t* nv12, int nv12_stride, uint8_t* bgra, int in_width, int in_height, bool is_front) {
     const uint8_t* yPlane = nv12;
     const uint8_t* uvPlane = nv12 + (nv12_stride * in_height);
     
     // Output dimensions after 90° CW rotation
     int out_width = in_height;
     int out_height = in_width;
-    int bgrStride = out_width * 3;
+    int bgraStride = out_width * 4;
 
+    #pragma omp parallel for
     for (int out_y = 0; out_y < out_height; ++out_y) {
         for (int out_x = 0; out_x < out_width; ++out_x) {
             // Map rotated output pixel back to input pixel
             // 90° CW: input(x, y) → output(in_height-1-y, x)
             // Inverse: output(out_x, out_y) → input(out_y, in_height-1-out_x)
-            int in_x = out_y;
+            // For front camera, we flip the output vertically (in_x mapping) to fix vertical mirror.
+            int in_x = is_front ? (in_width - 1 - out_y) : out_y;
             int in_y = in_height - 1 - out_x;
 
             int yIndex = in_y * nv12_stride + in_x;
@@ -46,10 +48,11 @@ static void NV12ToBGR24_Rotate90CW(const uint8_t* nv12, int nv12_stride, uint8_t
             g = (g < 0) ? 0 : ((g > 255) ? 255 : g);
             b = (b < 0) ? 0 : ((b > 255) ? 255 : b);
 
-            int bgrIndex = out_y * bgrStride + out_x * 3;
-            bgr[bgrIndex] = static_cast<uint8_t>(b);
-            bgr[bgrIndex + 1] = static_cast<uint8_t>(g);
-            bgr[bgrIndex + 2] = static_cast<uint8_t>(r);
+            int bgraIndex = out_y * bgraStride + out_x * 4;
+            bgra[bgraIndex] = static_cast<uint8_t>(b);
+            bgra[bgraIndex + 1] = static_cast<uint8_t>(g);
+            bgra[bgraIndex + 2] = static_cast<uint8_t>(r);
+            bgra[bgraIndex + 3] = 255; // Alpha channel (opaque)
         }
     }
 }
@@ -132,6 +135,8 @@ bool WMFH264Decoder::InitializeMF(int width, int height) {
     
     width_ = width;
     height_ = height;
+    requested_width_ = width;
+    requested_height_ = height;
     is_initialized_ = true;
     std::cout << "[WMF Decoder] MFT berhasil diinisialisasi: " << width << "x" << height << std::endl;
     return true;
@@ -143,9 +148,10 @@ bool WMFH264Decoder::Decode(
     uint8_t* output_buffer,
     size_t& output_size,
     int& out_width,
-    int& out_height
+    int& out_height,
+    bool is_front
 ) {
-    if (!is_initialized_ || out_width != width_ || out_height != height_) {
+    if (!is_initialized_ || out_width != requested_width_ || out_height != requested_height_) {
         if (!InitializeMF(out_width, out_height)) {
             return false;
         }
@@ -245,11 +251,11 @@ bool WMFH264Decoder::Decode(
                 // Rotate 90° CW: portrait (w×h) → landscape (h×w) to match MJPEG rotation behavior
                 int rotated_w = height_;
                 int rotated_h = width_;
-                int target_bgr_size = rotated_w * rotated_h * 3;
+                int target_bgra_size = rotated_w * rotated_h * 4;
 
-                if (output_size >= static_cast<size_t>(target_bgr_size)) {
-                    NV12ToBGR24_Rotate90CW(pOutData, nv12_stride, output_buffer, width_, height_);
-                    output_size = target_bgr_size;
+                if (output_size >= static_cast<size_t>(target_bgra_size)) {
+                    NV12ToBGRA32_Rotate90CW(pOutData, nv12_stride, output_buffer, width_, height_, is_front);
+                    output_size = target_bgra_size;
                     out_width = rotated_w;
                     out_height = rotated_h;
                     success = true;

@@ -45,6 +45,24 @@ class PlatformChannelSource {
     } catch (_) {}
   }
 
+  /// Commands the native layer to switch camera direction (front/back).
+  Future<void> switchCamera(bool useFront) async {
+    try {
+      await _controlChannel.invokeMethod('switchCamera', {'useFront': useFront});
+    } catch (e) {
+      print('[PlatformChannelSource] Error switching camera: $e');
+    }
+  }
+
+  /// Commands the native layer to toggle camera flash.
+  Future<void> toggleFlash(bool enable) async {
+    try {
+      await _controlChannel.invokeMethod('toggleFlash', {'enable': enable});
+    } catch (e) {
+      print('[PlatformChannelSource] Error toggling flash: $e');
+    }
+  }
+
   /// Retrieves list of supported camera resolutions with their maximum frame rates.
   Future<List<Map<String, dynamic>>> getSupportedResolutions() async {
     try {
