@@ -9,17 +9,19 @@
 
 ---
 
-## 🌟 Fitur Utama (v1.0.3)
+## 🌟 Fitur Utama (v1.0.4)
 
 - **⚡ Latensi Ultra-Rendah (< 50ms):** Penggunaan soket raw TCP asinkron yang dikombinasikan dengan optimasi `TCP_NODELAY` untuk pengiriman frame instan.
-- **📸 Akselerasi Hardware Encoder AVC/H.264 & HEVC/H.265:** Menggunakan kompresi perangkat keras bawaan perangkat Android (MediaCodec) untuk kompresi video H.264/H.265 berkinerja tinggi, menjaga FPS tetap stabil di **60 FPS** dengan penggunaan CPU minimum.
-- **🛡️ Dynamic Hardware Capability Check (Baru):** Otomatis mendeteksi batas kemampuan hardware encoder bawaan HP untuk resolusi yang dipilih (misal 1080p, 2K, 4K) dan melakukan fallback otomatis ke MJPEG dengan mulus jika tidak didukung.
-- **🔄 Auto Rotation & Stride-Aware (Baru):** Visualizer PC melakukan rotasi otomatis 90° CW untuk mode H.264 (sehingga orientasi sesuai) serta menangani dynamic stride padding memori dari GPU (flicker-free & crash-free).
+- **📸 Akselerasi Hardware Encoder AVC/H.264 & HEVC/H.265:** Menggunakan kompresi perangkat keras bawaan perangkat Android (MediaCodec) untuk kompresi video H.264/H.265 berkinerja tinggi, mendukung streaming super lancar hingga **60 FPS** dengan penggunaan CPU minimum.
+- **📏 Auto-Resize & Center Window (Baru):** Visualizer PC otomatis mendeteksi resolusi video dan menyesuaikan ukuran jendela secara dinamis mengikuti aspek rasio (portrait/landscape) serta memposisikannya tepat di tengah layar dengan batas maksimum 80% resolusi layar monitor.
+- **🔄 Switch Kamera & Kontrol Flash Dinamis (Baru):** Berpindah lensa depan/belakang serta menyalakan/mematikan lampu flash senter HP secara langsung dari aplikasi Flutter saat streaming berjalan tanpa memutus koneksi socket.
+- **🙃 Front Camera Auto-Flip (Baru):** Koreksi otomatis sensor kamera depan terbalik/vertical mirror, memutar dan membalik frame secara otomatis sehingga pas dengan orientasi natural layaknya cermin.
+- **⚙️ High Quality Temporal Noise Reduction & Bitrate 2K/4K (Baru):** Mengaktifkan temporal noise reduction berkualitas tinggi (`NOISE_REDUCTION_MODE_HIGH_QUALITY`) dan menonaktifkan penajaman tepi kasar (`EDGE_MODE_OFF`) serta menaikkan bitrate (hingga 14 Mbps untuk 1440p) untuk menghilangkan noise sensor digital dan compression artifacts.
+- **📱 Pilihan Resolusi Hardcoded & Validasi Kapabilitas Hardware Encoder (Baru):** Pilihan resolusi hardcoded standar (480p, 720p, 1080p, 1920p, 2K, 4K) yang divalidasi langsung terhadap kemampuan hardware encoder AVC bawaan HP Anda. Tombol resolusi yang tidak didukung akan dinonaktifkan dengan label `(Unsupported)`.
+- **🔄 Auto Rotation & Stride-Aware:** Visualizer PC melakukan rotasi otomatis 90° CW untuk mode H.264 serta menangani dynamic stride padding memori dari GPU (flicker-free & crash-free).
 - **🔇 Integrasi Audio Mikrofon Real-time:** Mendukung perekaman audio PCM 16-bit 48kHz Mono langsung dari mikrofon HP dan diputar secara real-time di PC menggunakan Windows native **waveOut API**.
 - **🔌 Deteksi Koneksi Cerdas & Full TCP:** Otomatis mendeteksi tipe koneksi (**🔌 USB ADB Mode** jika IP `127.0.0.1`, atau **📶 Wireless Mode** jika IP Wi-Fi PC dimasukkan). Protokol koneksi sepenuhnya menggunakan TCP yang stabil.
 - **📐 Rasio Aspek Cerdas:** Render layar visualizer PC pintar yang mengadopsi teknik *Pillarbox/Letterbox* otomatis. Tidak meregangkan gambar (*anti-stretching*).
-- **📱 Pilihan Resolusi Dinamis:** Mendeteksi daftar resolusi kamera yang didukung secara dinamis dari perangkat keras HP (360p, 480p, 720p, 1080p, 2K, 4K).
-- **⚙️ Optimalisasi ISP Kamera:** Mematikan pemrosesan pasca-gambar yang berat (Noise Reduction, Edge Enhancement, Color Aberration Correction, Hot Pixel Correction) untuk performa maksimum dan latensi zero-delay.
 
 ---
 
@@ -30,11 +32,10 @@ Proyek ini terbagi menjadi dua bagian utama:
 ### 1. Klien Seluler (Flutter & Kotlin Native) - `/mobile`
 Klien Android dibangun menggunakan **Clean Architecture** (Domain, Data, dan Presentation layers) untuk kestabilan kode:
 - **Presentation Layer:** ValueNotifier untuk manajemen status UI reaktif rendah konsumsi memori, serta dashboard visual bertema gelap (*dark mode*) neon futuristik premium.
-- **Data Layer (Kotlin Native):** Pipeline penangkapan frame kamera mengabaikan pengiriman raw data ke Dart. Kamera dikonfigurasi untuk mengeluarkan data JPEG terkompresi perangkat keras, lalu dibungkus header biner 20-byte Big-Endian sebelum dikirim melalui socket TCP.
+- **Data Layer (Kotlin Native):** Pipeline penangkapan frame kamera mengabaikan pengiriman raw data ke Dart. Kamera dikonfigurasi untuk mengeluarkan data JPEG terkompresi perangkat keras, lalu dibungkus header biner 24-byte Big-Endian sebelum dikirim melalui socket TCP.
 
-### 2. Penerima PC & Plugin OBS Studio (C++ & Win32) - `/obs`
-- **Standalone Visualizer (`camext_receiver.exe`):** Jendela preview super cepat Win32 API murni dengan akselerasi rendering GDI + WIC dan pemutaran audio waveOut real-time.
-- **Plugin OBS Studio (`camext.dll`):** Plugin native C++ yang mendaftarkan sumber video secara langsung ke libobs pipeline render OBS Studio.
+### 2. Penerima PC (C++ & Win32) - `/obs`
+- **Standalone Visualizer (`camext_receiver.exe`):** Jendela preview super cepat Win32 API murni dengan akselerasi rendering GDI + WIC, pemutaran audio waveOut real-time, dan pemosisian aspek rasio jendela dinamis. *Catatan: Target plugin OBS DLL lama (`camext.dll`) telah dihapus untuk mengutamakan performa visualizer mandiri.*
 
 ---
 
@@ -50,7 +51,6 @@ Buka PowerShell di dalam direktori `/obs` dan jalankan skrip kompilasi modular o
 powershell -ExecutionPolicy Bypass -File build.ps1
 ```
 Output biner:
-- [camext.dll](file:///d:/Project/OBSExtention/CamExt/obs/build/Release/camext.dll)
 - [camext_receiver.exe](file:///d:/Project/OBSExtention/CamExt/obs/build/Release/camext_receiver.exe)
 
 ### C. Kompilasi Aplikasi HP (Flutter)
