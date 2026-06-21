@@ -66,6 +66,7 @@ class MainActivity : FlutterActivity() {
     
     private var useFrontCamera = false
     private var flashEnabled = false
+    private var activeFps = 30
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -78,9 +79,10 @@ class MainActivity : FlutterActivity() {
                     val codec = call.argument<Int>("codec") ?: 1
                     val width = call.argument<Int>("width") ?: 1280
                     val height = call.argument<Int>("height") ?: 720
+                    val fps = call.argument<Int>("fps") ?: 30
                     val enableAudio = call.argument<Boolean>("enableAudio") ?: false
 
-                    startNativeCameraStream(ip, port, codec, width, height, enableAudio)
+                    startNativeCameraStream(ip, port, codec, width, height, fps, enableAudio)
                     result.success(null)
                 }
                 "stopCapture" -> {
@@ -108,13 +110,14 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun startNativeCameraStream(ip: String, port: Int, codec: Int, width: Int, height: Int, enableAudio: Boolean) {
+    private fun startNativeCameraStream(ip: String, port: Int, codec: Int, width: Int, height: Int, fps: Int, enableAudio: Boolean) {
         if (isStreamingNative) return
         isStreamingNative = true
         val currentSession = sessionVersion.incrementAndGet()
         activeCodec = codec
         activeWidth = width
         activeHeight = height
+        activeFps = fps
         sequenceNumber = 0
 
         if (cameraHandlerThread == null) {
@@ -206,7 +209,7 @@ class MainActivity : FlutterActivity() {
                     val format = MediaFormat.createVideoFormat(mime, width, height).apply {
                         setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
                         setInteger(MediaFormat.KEY_BIT_RATE, calculateBitrate(width, height))
-                        setInteger(MediaFormat.KEY_FRAME_RATE, 30)
+                        setInteger(MediaFormat.KEY_FRAME_RATE, activeFps)
                         setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
                         try { setInteger(MediaFormat.KEY_LATENCY, 1) } catch (e: Exception) {}
                         try { setInteger(MediaFormat.KEY_PRIORITY, 0) } catch (e: Exception) {}
@@ -365,8 +368,16 @@ class MainActivity : FlutterActivity() {
                     if (fpsRanges != null) {
                         var bestRange: android.util.Range<Int>? = null
                         for (range in fpsRanges) {
-                            if (range.upper == 30) {
+                            if (range.upper == activeFps) {
                                 if (bestRange == null || range.lower > bestRange.lower) {
+                                    bestRange = range
+                                }
+                            }
+                        }
+                        // Fallback: jika range dengan activeFps tidak ada, cari range dengan upper tertinggi
+                        if (bestRange == null) {
+                            for (range in fpsRanges) {
+                                if (bestRange == null || range.upper > bestRange!!.upper) {
                                     bestRange = range
                                 }
                             }
@@ -374,17 +385,6 @@ class MainActivity : FlutterActivity() {
                         if (bestRange != null) {
                             builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, bestRange)
                             System.out.println("[+] Native Camera: Target AE FPS Range disetel ke $bestRange")
-                        } else {
-                            var highestUpperRange: android.util.Range<Int>? = null
-                            for (range in fpsRanges) {
-                                if (highestUpperRange == null || range.upper > highestUpperRange.upper) {
-                                    highestUpperRange = range
-                                }
-                            }
-                            if (highestUpperRange != null) {
-                                builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, highestUpperRange)
-                                System.out.println("[+] Native Camera: Target AE FPS Range fallback disetel ke $highestUpperRange")
-                            }
                         }
                     }
 
